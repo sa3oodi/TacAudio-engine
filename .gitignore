@@ -1,0 +1,11 @@
+build/
+out/
+.vs/
+*.user
+/renders/
+/data/hrtf/*.sofa
+/data/hrtf/sadie2/*.sofa
+__pycache__/
+
+# Private research notes (not published)
+DTS_TECH.md
