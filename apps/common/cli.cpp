@@ -60,7 +60,14 @@ Args parse(int argc, char** argv, int first, std::initializer_list<const char*> 
     return a;
 }
 
+namespace {
+fs::path g_exeDirOverride;
+}
+
+void setExeDirOverride(const fs::path& dir) { g_exeDirOverride = dir; }
+
 fs::path exeDir() {
+    if (!g_exeDirOverride.empty()) return g_exeDirOverride;
 #ifdef _WIN32
     wchar_t buf[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);

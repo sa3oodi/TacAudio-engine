@@ -224,6 +224,23 @@ int cmdInstall(const std::string& device, DWORD channels) {
     }
     std::printf("copied   : %s\n", narrow(dst.wstring()).c_str());
 
+    // 1b) Head (HRTF) files next to the DLL: hrtf/MIT KEMAR + hrtf/sadie2/{D1,D2}.sofa.
+    {
+        const fs::path srcHrtf = exeDir() / L"hrtf";
+        fs::create_directories(dstDir / L"hrtf" / L"sadie2");
+        fs::copy_file(srcHrtf / L"MIT_KEMAR_normal_pinna.sofa", dstDir / L"hrtf" / L"MIT_KEMAR_normal_pinna.sofa",
+                      fs::copy_options::overwrite_existing, ec);
+        if (ec) fail("cannot copy the MIT KEMAR head: " + ec.message());
+        for (const fs::path& dir : {srcHrtf / L"sadie2", exeDir() / L".." / L".." / L"data" / L"hrtf" / L"sadie2"}) {
+            if (!fs::exists(dir / L"D2.sofa")) continue;
+            for (const wchar_t* f : {L"D1.sofa", L"D2.sofa", L"LICENSE.txt"})
+                if (fs::exists(dir / f)) fs::copy_file(dir / f, dstDir / L"hrtf" / L"sadie2" / f, fs::copy_options::overwrite_existing, ec);
+            break;
+        }
+        std::printf("heads    : %s\n", fs::exists(dstDir / L"hrtf" / L"sadie2" / L"D2.sofa") ? "MIT KEMAR + SADIE II KU100, KEMAR"
+                                                                                               : "MIT KEMAR only");
+    }
+
     // 2) COM + APO registration.
     HMODULE m = LoadLibraryW(dst.c_str());
     if (!m) fail("cannot load the installed DLL");
@@ -236,7 +253,17 @@ int cmdInstall(const std::string& device, DWORD channels) {
     // 3) Log folder writable by the audio service (LOCAL SERVICE, S-1-5-19).
     const fs::path logDir = logFile().parent_path();
     fs::create_directories(logDir);
-    run((L"icacls \"" + logDir.wstring() + L"\" /grant *S-1-5-19:(OI)(CI)M /grant *S-1-5-32-545:(OI)(CI)RX").c_str());
+    // Users may modify too: the (non-admin) app writes apo.ini to control the APO.
+    run((L"icacls \"" + logDir.wstring() + L"\" /grant *S-1-5-19:(OI)(CI)M /grant *S-1-5-32-545:(OI)(CI)M").c_str());
+    // Seed the APO's settings from the app's (same keys), if none exist yet.
+    const fs::path apoIni = logDir / L"apo.ini";
+    if (!fs::exists(apoIni)) {
+        const fs::path appIni = knownDir(L"APPDATA") / L"TacAudio" / L"settings.ini";
+        if (fs::exists(appIni)) fs::copy_file(appIni, apoIni, ec);
+        else std::ofstream(apoIni) << "head=kemar\nroom=balanced\n";
+        std::printf("settings : %s (from %s)\n", narrow(apoIni.wstring()).c_str(),
+                    fs::exists(appIni) ? "your TacAudio app settings" : "defaults");
+    }
     fs::remove(logFile(), ec);
 
     // 4) Config + backup + attach.
@@ -421,17 +448,41 @@ int cmdSelfTest() {
     pout.u32BufferFlags = BUFFER_INVALID;
     APO_CONNECTION_PROPERTY *ppi = &pin, *ppo = &pout;
     bool ok = true;
-    for (UINT32 c = 0; c < ci; ++c) {  // a unit impulse per input channel -> must reach the output
-        std::fill(inBuf.begin(), inBuf.end(), 0.0f);
-        inBuf[10 * ci + c] = 1.0f;
-        rt->APOProcess(1, &ppi, 1, &ppo);
-        float l = outBuf[10 * co], r = co > 1 ? outBuf[10 * co + 1] : 0.0f;
-        std::printf("  input ch %u -> out L %.3f  R %.3f\n", c, l, r);
-        ok &= pout.u32BufferFlags == BUFFER_VALID && pout.u32ValidFrameCount == kFrames && (l != 0.0f || r != 0.0f);
-    }
+    // Silence for 3 s of wall time so the engine's worker can load the head and build the renderer.
     pin.u32BufferFlags = BUFFER_SILENT;
-    rt->APOProcess(1, &ppi, 1, &ppo);
-    ok &= pout.u32BufferFlags == BUFFER_SILENT && outBuf[0] == 0.0f;
+    for (int i = 0; i < 30; ++i) {
+        rt->APOProcess(1, &ppi, 1, &ppo);
+        ok &= pout.u32BufferFlags == BUFFER_VALID && pout.u32ValidFrameCount == kFrames;
+        Sleep(100);
+    }
+    // A 0.5 s, 1 kHz tone per input channel; measure left/right output energy.
+    pin.u32BufferFlags = BUFFER_VALID;
+    const char* names[] = {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"};
+    std::uint64_t t = 0;
+    for (UINT32 c = 0; c < ci; ++c) {
+        double el = 0, er = 0;
+        for (int b = 0; b < 50; ++b) {  // 50 x 10 ms
+            std::fill(inBuf.begin(), inBuf.end(), 0.0f);
+            const double f = (ci == 8 && c == 3) ? 60.0 : 1000.0;
+            for (UINT32 i = 0; i < kFrames; ++i, ++t)
+                inBuf[i * ci + c] = 0.25f * static_cast<float>(std::sin(2.0 * 3.14159265358979 * f * static_cast<double>(t) / 48000.0));
+            rt->APOProcess(1, &ppi, 1, &ppo);
+            if (b >= 10)
+                for (UINT32 i = 0; i < kFrames; ++i) {
+                    el += outBuf[i * co] * outBuf[i * co];
+                    if (co > 1) er += outBuf[i * co + 1] * outBuf[i * co + 1];
+                }
+        }
+        const double ldb = 10 * std::log10(el / (40.0 * kFrames) + 1e-12), rdb = 10 * std::log10(er / (40.0 * kFrames) + 1e-12);
+        std::printf("  %-3s -> L %6.1f dB  R %6.1f dB\n", ci == 8 ? names[c] : "ch", ldb, rdb);
+        ok &= ldb > -60.0 || rdb > -60.0;
+        if (ci == 8 && (c == 0 || c == 4 || c == 6)) ok &= ldb > rdb + 3.0;  // left-side speakers lean left
+        if (ci == 8 && (c == 1 || c == 5 || c == 7)) ok &= rdb > ldb + 3.0;
+        for (int b = 0; b < 30; ++b) {  // let tails die out
+            std::fill(inBuf.begin(), inBuf.end(), 0.0f);
+            rt->APOProcess(1, &ppi, 1, &ppo);
+        }
+    }
     cfg->UnlockForProcess();
     inT->Release();
     outT->Release();

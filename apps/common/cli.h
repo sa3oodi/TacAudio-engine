@@ -26,6 +26,8 @@ struct Args {
 Args parse(int argc, char** argv, int first, std::initializer_list<const char*> flags);
 
 std::filesystem::path exeDir();
+// Code loaded into another process (the APO inside audiodg.exe) points exeDir() at its own folder.
+void setExeDirOverride(const std::filesystem::path& dir);
 
 // Installed head (HRTF) sets selectable with --head <name>: "mit" (bundled), and if SADIE II is
 // present in data/hrtf/sadie2: "ku100", "kemar", "h3".."h20".

@@ -28,7 +28,12 @@
 #include <mutex>
 #include <new>
 #include <string>
+#include <filesystem>
+#include <memory>
 #include <thread>
+#include <vector>
+
+#include "apo_engine.h"
 
 namespace {
 
@@ -83,6 +88,36 @@ void logLine(const char* fmt, ...) {
     va_end(ap);
     fputc('\n', f);
     fclose(f);
+}
+
+}  // namespace
+
+namespace tac::apo {
+// Log sink for the engine (apo_engine.cpp).
+void apoLog(const char* fmt, ...) {
+    char msg[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    logLine("%s", msg);
+}
+}  // namespace tac::apo
+
+namespace {
+
+std::filesystem::path moduleDir() {
+    wchar_t p[MAX_PATH];
+    GetModuleFileNameW(g_module, p, MAX_PATH);
+    return std::filesystem::path(p).parent_path();
+}
+
+std::filesystem::path settingsPath() {
+    PWSTR pd = nullptr;
+    std::filesystem::path p = L"C:\\ProgramData";
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &pd))) p = pd;
+    CoTaskMemFree(pd);
+    return p / L"TacAudio" / L"apo.ini";
 }
 
 std::string describe(IAudioMediaType* t) {
@@ -354,12 +389,20 @@ public:
         inCh_ = fi.dwSamplesPerFrame;
         outCh_ = fo.dwSamplesPerFrame;
         inMask_ = fi.dwChannelMask;
+        silence_.assign(static_cast<size_t>(in[0]->u32MaxFrameCount) * inCh_, 0.0f);
+        try {
+            engine_ = std::make_unique<tac::apo::ApoEngine>(fi.fFramesPerSecond, inCh_, inMask_, moduleDir(), settingsPath());
+        } catch (const std::exception& e) {
+            logLine("engine start failed: %s - using plain downmix", e.what());
+            engine_.reset();
+        }
         locked_ = true;
         startLogger();
         return S_OK;
     }
     STDMETHODIMP UnlockForProcess() override {
         stopLogger();
+        engine_.reset();
         locked_ = false;
         logLine("UnlockForProcess (%llu frames processed)", frames_.load());
         return S_OK;
@@ -371,6 +414,19 @@ public:
         if (nIn < 1 || nOut < 1 || !in[0] || !out[0]) return;
         const UINT32 n = in[0]->u32ValidFrameCount;
         auto* dst = reinterpret_cast<float*>(out[0]->pBuffer);
+        if (engine_) {  // TacAudio: keeps running on silent input (reverb / filter tails)
+            const bool valid = in[0]->u32BufferFlags == BUFFER_VALID;
+            const auto* src = valid ? reinterpret_cast<const float*>(in[0]->pBuffer) : silence_.data();
+            if (valid) trackPeaks(src, n);
+            if (valid || static_cast<size_t>(n) * inCh_ <= silence_.size())
+                engine_->process(src, dst, n, outCh_);
+            else
+                std::memset(dst, 0, static_cast<size_t>(n) * outCh_ * sizeof(float));
+            out[0]->u32ValidFrameCount = n;
+            out[0]->u32BufferFlags = BUFFER_VALID;
+            frames_ += n;
+            return;
+        }
         if (in[0]->u32BufferFlags != BUFFER_VALID) {
             std::memset(dst, 0, static_cast<size_t>(n) * outCh_ * sizeof(float));
             out[0]->u32ValidFrameCount = n;
@@ -379,16 +435,7 @@ public:
             return;
         }
         const auto* src = reinterpret_cast<const float*>(in[0]->pBuffer);
-
-        // Per-channel peaks for the log.
-        float pk[kMaxCh] = {};
-        for (UINT32 i = 0; i < n; ++i)
-            for (UINT32 c = 0; c < inCh_; ++c) pk[c] = std::max(pk[c], std::fabs(src[i * inCh_ + c]));
-        for (UINT32 c = 0; c < inCh_; ++c) {
-            float cur = peak_[c].load(std::memory_order_relaxed);
-            while (pk[c] > cur && !peak_[c].compare_exchange_weak(cur, pk[c], std::memory_order_relaxed)) {
-            }
-        }
+        trackPeaks(src, n);
 
         if (inCh_ == outCh_) {
             if (dst != src) std::memcpy(dst, src, static_cast<size_t>(n) * inCh_ * sizeof(float));
@@ -413,6 +460,18 @@ public:
     STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inFrames) override { return inFrames; }
 
 private:
+    // Per-channel peaks for the log (real time: atomics only).
+    void trackPeaks(const float* src, UINT32 n) noexcept {
+        float pk[kMaxCh] = {};
+        for (UINT32 i = 0; i < n; ++i)
+            for (UINT32 c = 0; c < inCh_; ++c) pk[c] = std::max(pk[c], std::fabs(src[i * inCh_ + c]));
+        for (UINT32 c = 0; c < inCh_; ++c) {
+            float cur = peak_[c].load(std::memory_order_relaxed);
+            while (pk[c] > cur && !peak_[c].compare_exchange_weak(cur, pk[c], std::memory_order_relaxed)) {
+            }
+        }
+    }
+
     void startLogger() {
         stopLogger();
         logStop_ = false;
@@ -447,6 +506,8 @@ private:
     std::atomic<unsigned long long> frames_{0};
     std::atomic<float> peak_[kMaxCh] = {};
     std::thread logger_;
+    std::unique_ptr<tac::apo::ApoEngine> engine_;
+    std::vector<float> silence_;
     std::atomic<bool> logStop_{true};
 };
 
