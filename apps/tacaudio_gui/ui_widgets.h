@@ -55,6 +55,7 @@ extern const char* Refresh;
 extern const char* Reset;
 extern const char* Power;
 extern const char* Volume;
+extern const char* Settings;
 }  // namespace icon
 
 // ------------------------------------------------------------------ text helpers
@@ -83,6 +84,8 @@ bool segmentedRow(const char* label, int* index, const std::vector<std::string>&
 // Label | dropdown | reset (reset hidden when def is empty).
 bool comboRow(const char* label, std::string* value, const std::vector<std::string>& items,
               const std::vector<std::string>* itemHelp, const std::string& def, const char* help = nullptr);
+// Label | toggle | description | reset. Returns true when the value changed.
+bool toggleRow(const char* label, bool* v, const char* description, bool def);
 // Small round icon button. Returns true when clicked.
 bool iconButton(const char* id, const char* glyph, const char* help, bool enabled = true, float size = 28.0f);
 bool pillButton(const char* label, ImU32 bg, ImU32 fg, float width = 0.0f);

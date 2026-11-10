@@ -85,9 +85,122 @@ void cleanupDevice() {
     if (g_device) g_device->Release();
 }
 
+// ------------------------------------------------------------------ tray, hotkeys, single instance
+constexpr UINT WM_TRAY = WM_APP + 1;      // tray icon callback
+constexpr UINT WM_SHOWAPP = WM_APP + 2;   // sent by a second instance: bring the window forward
+constexpr int kHotPower = 1, kHot3d = 2;
+enum : UINT { kMenuOpen = 100, kMenuPower, kMenu3d, kMenuExit };
+
+App* g_app = nullptr;
+HWND g_hwnd = nullptr;
+bool g_visible = true;
+bool g_quitting = false;
+bool g_hotkeysOn = false;
+NOTIFYICONDATAW g_tray{};
+
+void showWindow() {
+    ShowWindow(g_hwnd, SW_SHOW);
+    ShowWindow(g_hwnd, SW_RESTORE);
+    SetForegroundWindow(g_hwnd);
+    g_visible = true;
+}
+void hideWindow() {
+    ShowWindow(g_hwnd, SW_HIDE);
+    g_visible = false;
+}
+
+void trayAdd(HINSTANCE inst) {
+    g_tray.cbSize = sizeof(g_tray);
+    g_tray.hWnd = g_hwnd;
+    g_tray.uID = 1;
+    g_tray.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_tray.uCallbackMessage = WM_TRAY;
+    g_tray.hIcon = static_cast<HICON>(LoadImageW(inst, MAKEINTRESOURCEW(101), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                                 GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+    if (!g_tray.hIcon) g_tray.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));  // IDI_APPLICATION
+    wcscpy_s(g_tray.szTip, L"TacAudio");
+    Shell_NotifyIconW(NIM_ADD, &g_tray);
+}
+void traySetTip(const std::string& tip) {
+    wchar_t w[128];
+    MultiByteToWideChar(CP_UTF8, 0, tip.c_str(), -1, w, 128);
+    if (wcscmp(w, g_tray.szTip) == 0) return;
+    wcscpy_s(g_tray.szTip, w);
+    g_tray.uFlags = NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &g_tray);
+}
+void trayBalloon(const wchar_t* title, const wchar_t* text) {
+    g_tray.uFlags = NIF_INFO;
+    wcscpy_s(g_tray.szInfoTitle, title);
+    wcscpy_s(g_tray.szInfo, text);
+    g_tray.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
+    Shell_NotifyIconW(NIM_MODIFY, &g_tray);
+}
+void trayMenu() {
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, kMenuOpen, L"Open TacAudio");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING | (g_app && g_app->engineWanted() ? MF_CHECKED : 0), kMenuPower, L"TacAudio on");
+    AppendMenuW(m, MF_STRING | (g_app && g_app->enabled3d() ? MF_CHECKED : 0), kMenu3d, L"3D sound");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, kMenuExit, L"Exit");
+    SetMenuDefaultItem(m, kMenuOpen, FALSE);
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(g_hwnd);  // so the menu closes when clicking elsewhere
+    TrackPopupMenu(m, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_hwnd, nullptr);
+    DestroyMenu(m);
+}
+void syncHotkeys() {
+    const bool want = g_app && g_app->hotkeysEnabled();
+    if (want == g_hotkeysOn) return;
+    if (want) {
+        RegisterHotKey(g_hwnd, kHotPower, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F10);
+        RegisterHotKey(g_hwnd, kHot3d, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_F9);
+    } else {
+        UnregisterHotKey(g_hwnd, kHotPower);
+        UnregisterHotKey(g_hwnd, kHot3d);
+    }
+    g_hotkeysOn = want;
+}
+
 LRESULT WINAPI wndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
     switch (msg) {
+        case WM_TRAY:
+            if (LOWORD(lParam) == WM_LBUTTONUP || LOWORD(lParam) == WM_LBUTTONDBLCLK) showWindow();
+            else if (LOWORD(lParam) == WM_RBUTTONUP) trayMenu();
+            return 0;
+        case WM_SHOWAPP:
+            showWindow();
+            return 0;
+        case WM_HOTKEY:
+            if (g_app && wParam == kHotPower) g_app->togglePower();
+            if (g_app && wParam == kHot3d) g_app->toggle3d();
+            return 0;
+        case WM_COMMAND:
+            switch (LOWORD(wParam)) {
+                case kMenuOpen: showWindow(); break;
+                case kMenuPower: if (g_app) g_app->togglePower(); break;
+                case kMenu3d: if (g_app) g_app->toggle3d(); break;
+                case kMenuExit:
+                    g_quitting = true;
+                    DestroyWindow(hWnd);
+                    break;
+            }
+            return 0;
+        case WM_CLOSE:
+            if (!g_quitting && g_app && g_app->closeToTray()) {
+                static bool told = false;
+                hideWindow();
+                if (!told) {
+                    trayBalloon(L"TacAudio is still running", L"It keeps working in the tray. Right-click the icon to exit.");
+                    told = true;
+                }
+                return 0;
+            }
+            DestroyWindow(hWnd);
+            return 0;
         case WM_SIZE:
             if (wParam == SIZE_MINIMIZED) return 0;
             g_resizeW = LOWORD(lParam);
@@ -225,17 +338,33 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     const bool preview = cmd.find(L"--preview") != std::wstring::npos;
     int page = 0;
     if (const auto p = cmd.find(L"--page "); p != std::wstring::npos) page = _wtoi(cmd.c_str() + p + 7);
+    const bool startHidden = cmd.find(L"--minimized") != std::wstring::npos;
+
+    // Single instance: a second launch just brings the running TacAudio forward.
+    HANDLE instanceMutex = nullptr;
+    if (!smoke) {
+        instanceMutex = CreateMutexW(nullptr, TRUE, L"Local\\TacAudio.SingleInstance");
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            if (HWND other = FindWindowW(L"TacAudioGui", nullptr)) PostMessageW(other, WM_SHOWAPP, 0, 0);
+            if (instanceMutex) CloseHandle(instanceMutex);
+            return 0;
+        }
+    }
 
     wasapi::ComScope com;
     ImGui_ImplWin32_EnableDpiAwareness();
     const float dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
     ui::dpi = dpi;
 
-    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, hInst, nullptr, LoadCursor(nullptr, IDC_ARROW),
-                      nullptr, nullptr, L"TacAudioGui", nullptr};
+    HICON bigIcon = static_cast<HICON>(LoadImageW(hInst, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
+    HICON smallIcon = static_cast<HICON>(LoadImageW(hInst, MAKEINTRESOURCEW(101), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                                    GetSystemMetrics(SM_CYSMICON), 0));
+    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, hInst, bigIcon, LoadCursor(nullptr, IDC_ARROW),
+                      nullptr, nullptr, L"TacAudioGui", smallIcon};
     RegisterClassExW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"TacAudio", WS_OVERLAPPEDWINDOW, 80, 60, static_cast<int>(1200 * dpi),
-                              static_cast<int>(880 * dpi), nullptr, nullptr, hInst, nullptr);
+                              static_cast<int>(920 * dpi), nullptr, nullptr, hInst, nullptr);
+    g_hwnd = hwnd;
     // Dark title bar matching the app (Windows 11; ignored where unsupported).
     const BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof(dark));
@@ -247,8 +376,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
         UnregisterClassW(wc.lpszClassName, hInst);
         return 1;
     }
-    ShowWindow(hwnd, smoke ? SW_HIDE : SW_SHOWDEFAULT);
+    g_visible = !(smoke || startHidden);
+    ShowWindow(hwnd, g_visible ? SW_SHOWDEFAULT : SW_HIDE);
     UpdateWindow(hwnd);
+    if (!smoke) trayAdd(hInst);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -260,9 +391,12 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     int result = 0;
     {
         App app(smoke && preview);
+        g_app = &app;
         app.setPage(page);
+        if (!smoke) app.autoStartIfEnabled();
         int frames = 0;
         bool done = false;
+        auto lastTip = std::chrono::steady_clock::now();
         while (!done) {
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -271,6 +405,18 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
                 if (msg.message == WM_QUIT) done = true;
             }
             if (done) break;
+            if (!smoke) {
+                syncHotkeys();
+                if (std::chrono::steady_clock::now() - lastTip > std::chrono::seconds(1)) {
+                    traySetTip(app.trayTooltip());
+                    lastTip = std::chrono::steady_clock::now();
+                }
+            }
+            if (!g_visible && !smoke) {  // tray mode: no rendering, just keep the engine supervised
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, 100, QS_ALLINPUT);
+                app.tick();
+                continue;
+            }
             if (smoke && ++frames > 40) break;  // enough frames for animations to settle
             if (g_resizeW) {
                 cleanupRenderTarget();
@@ -290,13 +436,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             if (smoke && frames == 40) saveScreenshot(fs::temp_directory_path() / "tacaudio_gui_smoke.bmp");
             g_swapChain->Present(1, 0);
         }
+        g_app = nullptr;
     }
 
+    if (!smoke) Shell_NotifyIconW(NIM_DELETE, &g_tray);
+    if (g_hotkeysOn) {
+        UnregisterHotKey(hwnd, kHotPower);
+        UnregisterHotKey(hwnd, kHot3d);
+    }
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     cleanupDevice();
-    DestroyWindow(hwnd);
+    if (IsWindow(hwnd)) DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, hInst);
+    if (instanceMutex) CloseHandle(instanceMutex);
     return result;
 }

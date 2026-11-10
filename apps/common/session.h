@@ -31,13 +31,14 @@ struct SoundSettings {
     std::string dynamics = "medium";
     float punch = 60.0f;
     float footstepsDb = 3.0f;
+    float bassDb = 0.0f;    // LFE (subwoofer channel) level into both ears; 0 dB = no boost
     float volumeDb = -6.0f;
     bool enabled3d = true;  // false = plain stereo downmix (A/B)
 
     // True if switching between a and b needs a renderer rebuild (not just volume / 3D toggle).
     static bool needsRebuild(const SoundSettings& a, const SoundSettings& b) {
         return a.head != b.head || a.room != b.room || a.dynamics != b.dynamics || a.punch != b.punch ||
-               a.footstepsDb != b.footstepsDb;
+               a.footstepsDb != b.footstepsDb || a.bassDb != b.bassDb;
     }
 };
 

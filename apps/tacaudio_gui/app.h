@@ -19,6 +19,12 @@ struct AppSettings {
     bool stepsOn = true;
     float stepsLevel = 3.0f;
 
+    // App behaviour.
+    bool startWithWindows = false;  // mirrored from the registry Run key
+    bool autoEngine = true;         // turn the engine on when the app starts
+    bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
+    bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
+
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
         s.dynamics = dynOn ? dynPreset : "off";
@@ -30,12 +36,30 @@ struct AppSettings {
 AppSettings loadSettings();
 void saveSettings(const AppSettings& s);
 
+// Registry "Run" entry so TacAudio starts with Windows (per user, no admin needed).
+bool autostartEnabled();
+void setAutostart(bool on);
+
 class App {
 public:
     explicit App(bool previewRunning = false);  // preview: fake live data (screenshots only)
     ~App();
     void frame();           // build the whole UI for this frame
+    void tick();            // background work while the window is hidden (tray mode)
     void setPage(int p) { page_ = p; }
+
+    // Called by the window host (tray menu, hotkeys, launch).
+    void togglePower() { startStop(); }
+    void toggle3d();
+    void autoStartIfEnabled();
+    bool engineWanted() const { return wantRunning_; }
+    bool enabled3d() const { return cfg_.sound.enabled3d; }
+    bool closeToTray() const { return cfg_.closeToTray; }
+    bool hotkeysEnabled() const { return cfg_.hotkeys; }
+    std::string trayTooltip() const;
+
+    static constexpr const char* kHotkeyPower = "Ctrl + Alt + F10";
+    static constexpr const char* kHotkey3d = "Ctrl + Alt + F9";
 
 private:
     void sidebar();
@@ -44,9 +68,11 @@ private:
     void pageSound();
     void pageDevices();
     void pagePerformance();
+    void pageSettings();
     void pageAbout();
 
     void startStop();
+    void supervise();  // reconnect after device loss / failed start
     void requestRebuild() { wantRebuild_ = true; }
     void pollBackground();
     void refreshDevices();
@@ -61,6 +87,10 @@ private:
     bool wantRebuild_ = false;
     bool preview_ = false;
     int page_ = 0;
+    bool wantRunning_ = false;  // user intent: engine should be on (reconnects until it is)
+    bool lastJobWasStart_ = false;
+    std::chrono::steady_clock::time_point retryAt_{};
+    int retries_ = 0;
 
     SessionStatus status_;
     std::chrono::steady_clock::time_point lastStatus_, lastSave_;

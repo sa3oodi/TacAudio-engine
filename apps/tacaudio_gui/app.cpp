@@ -67,13 +67,46 @@ AppSettings loadSettings() {
             else if (k == "dynPreset") s.dynPreset = v;
             else if (k == "stepsOn") s.stepsOn = v == "1";
             else if (k == "stepsLevel") s.stepsLevel = std::stof(v);
+            else if (k == "bass") s.sound.bassDb = std::stof(v);
+            else if (k == "autoEngine") s.autoEngine = v == "1";
+            else if (k == "closeToTray") s.closeToTray = v == "1";
+            else if (k == "hotkeys") s.hotkeys = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
     }
     if (indexOf(kPresets, s.dynPreset, -1) < 0) s.dynPreset = "medium";
     if (indexOf(kRooms, s.sound.room, -1) < 0) s.sound.room = "balanced";
+    s.startWithWindows = autostartEnabled();  // the registry is the source of truth
     return s;
+}
+
+namespace {
+constexpr const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr const wchar_t* kRunValue = L"TacAudio";
+}  // namespace
+
+bool autostartEnabled() {
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) return false;
+    const bool present = RegQueryValueExW(k, kRunValue, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+    RegCloseKey(k);
+    return present;
+}
+
+void setAutostart(bool on) {
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_SET_VALUE, &k) != ERROR_SUCCESS) return;
+    if (on) {
+        wchar_t exe[MAX_PATH];
+        GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        const std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --minimized";
+        RegSetValueExW(k, kRunValue, 0, REG_SZ, reinterpret_cast<const BYTE*>(cmd.c_str()),
+                       static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
+    } else {
+        RegDeleteValueW(k, kRunValue);
+    }
+    RegCloseKey(k);
 }
 
 void saveSettings(const AppSettings& s) {
@@ -83,7 +116,9 @@ void saveSettings(const AppSettings& s) {
     f << "source=" << s.dev.source << "\noutput=" << s.dev.output << "\nexclusive=" << (s.dev.exclusive ? 1 : 0)
       << "\nhead=" << s.sound.head << "\nroom=" << s.sound.room << "\npunch=" << s.sound.punch
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
-      << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel << "\n";
+      << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
+      << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
+      << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0) << "\n";
 }
 
 // ------------------------------------------------------------------ app
@@ -162,21 +197,75 @@ void App::refreshDevices() {
 }
 
 void App::startStop() {
+    if (busy()) return;
     error_.clear();
-    if (session_.running()) {
+    retries_ = 0;
+    if (wantRunning_ || session_.running()) {
+        wantRunning_ = false;
+        lastJobWasStart_ = false;
         launch("Stopping", [this] { session_.stop(); });
     } else {
-        const DeviceSettings d = cfg_.dev;
-        const SoundSettings s = cfg_.effective();
-        launch("Starting", [this, d, s] { session_.start(d, s); });
+        wantRunning_ = true;
+        retryAt_ = {};  // start now (supervise() launches it)
     }
 }
+
+void App::toggle3d() {
+    cfg_.sound.enabled3d = !cfg_.sound.enabled3d;
+    session_.set3d(cfg_.sound.enabled3d);
+}
+
+void App::autoStartIfEnabled() {
+    if (cfg_.autoEngine && !wantRunning_) startStop();
+}
+
+std::string App::trayTooltip() const {
+    if (!wantRunning_) return "TacAudio - off";
+    if (!status_.running) return retries_ > 0 ? "TacAudio - reconnecting..." : "TacAudio - starting...";
+    char b[96];
+    std::snprintf(b, sizeof(b), "TacAudio - %s, 3D %s, ~%.0f ms", status_.engine.running ? "playing" : "waiting for game",
+                  cfg_.sound.enabled3d ? "on" : "off", status_.latencyMs);
+    return b;
+}
+
+// Keeps the engine running while the user wants it on: (re)starts it, and restarts it after
+// a device disappears (GoXLR reset, cable removed, ...), retrying every few seconds.
+void App::supervise() {
+    if (preview_ || busy()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (wantRunning_ && session_.running() && !status_.error.empty()) {
+        lastJobWasStart_ = false;
+        retryAt_ = now + std::chrono::seconds(2);
+        status_ = {};
+        launch("Reconnecting", [this] { session_.stop(); });
+        return;
+    }
+    if (wantRunning_ && !session_.running() && now >= retryAt_) {
+        const DeviceSettings d = cfg_.dev;
+        const SoundSettings s = cfg_.effective();
+        lastJobWasStart_ = true;
+        retryAt_ = now + std::chrono::seconds(3);
+        launch(retries_ > 0 ? "Reconnecting" : "Starting", [this, d, s] { session_.start(d, s); });
+        ++retries_;
+    }
+}
+
+void App::tick() { pollBackground(); }
 
 void App::pollBackground() {
     if (job_.valid() && !busy()) {
         const std::string err = job_.get();
-        if (!err.empty()) error_ = err;
+        if (!err.empty()) {
+            error_ = err;
+            if (lastJobWasStart_ && wantRunning_)
+                error_ += "  (retrying every 3 s - turn TacAudio off to stop)";
+        } else if (lastJobWasStart_ && session_.running()) {
+            error_.clear();
+            retries_ = 0;
+        }
+        lastJobWasStart_ = false;
     }
+    supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
         wantRebuild_ = false;
         const SoundSettings s = cfg_.effective();
@@ -194,8 +283,8 @@ void App::pollBackground() {
             while (histCpu_.size() > 120) histCpu_.pop_front();
         }
     }
-    // Meters: fast attack, 30 dB/s fall, 1.2 s peak hold.
-    if (!preview_) {
+    // Meters: fast attack, 30 dB/s fall, 1.2 s peak hold (only while the window is drawn).
+    if (!preview_ && ImGui::GetCurrentContext() && ImGui::GetFrameCount() > 0 && ImGui::GetIO().DeltaTime < 0.5f) {
         float l = 0, r = 0;
         session_.meters(l, r);
         const float dt = ImGui::GetIO().DeltaTime, t = static_cast<float>(ImGui::GetTime());
@@ -215,7 +304,9 @@ void App::pollBackground() {
                          cfg_.dev.exclusive != saved_.dev.exclusive ||
                          SoundSettings::needsRebuild(cfg_.effective(), saved_.effective()) ||
                          cfg_.sound.volumeDb != saved_.sound.volumeDb || cfg_.sound.enabled3d != saved_.sound.enabled3d ||
-                         cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel;
+                         cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
+                         cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
+                         cfg_.hotkeys != saved_.hotkeys;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -249,6 +340,7 @@ void App::frame() {
         case 0: pageSound(); break;
         case 1: pageDevices(); break;
         case 2: pagePerformance(); break;
+        case 3: pageSettings(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -281,9 +373,9 @@ void App::sidebar() {
     ImGui::SetCursorScreenPos(ImVec2(lp.x - S(8), lp.y + S(66)));
     ImGui::Dummy(ImVec2(0, 0));
 
-    const char* glyphs[] = {icon::Audio, icon::Devices, icon::Gauge, icon::Info};
-    const char* labels[] = {"Sound", "Devices", "Performance", "About"};
-    for (int i = 0; i < 4; ++i)
+    const char* glyphs[] = {icon::Audio, icon::Devices, icon::Gauge, icon::Settings, icon::Info};
+    const char* labels[] = {"Sound", "Devices", "Performance", "Settings", "About"};
+    for (int i = 0; i < 5; ++i)
         if (navItem(glyphs[i], labels[i], page_ == i)) page_ = i;
 
     // Engine status at the bottom of the sidebar.
@@ -329,7 +421,7 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
     dl->AddText(fonts.regular, S(17), pp + ImVec2(S(16), S(11)), running ? col::Accent : col::Dim, icon::Power);
     dl->AddText(fonts.semibold, S(14.5f), pp + ImVec2(S(42), S(11)), col::Text, running ? "ON" : "OFF");
     ImGui::SetCursorScreenPos(pp + ImVec2(ps.x - S(56), S(10)));
-    bool on = running;
+    bool on = wantRunning_ || preview_;
     ImGui::BeginDisabled(working || preview_);
     if (toggle("##power", &on)) startStop();
     ImGui::EndDisabled();
@@ -379,6 +471,7 @@ void App::pageSound() {
         cfg_.sound.room = def.sound.room;
         cfg_.sound.punch = def.sound.punch;
         cfg_.sound.volumeDb = def.sound.volumeDb;
+        cfg_.sound.bassDb = def.sound.bassDb;
         cfg_.sound.enabled3d = def.sound.enabled3d;
         cfg_.dynOn = def.dynOn;
         cfg_.dynPreset = def.dynPreset;
@@ -476,6 +569,11 @@ void App::pageSound() {
     const Edit ve = sliderRow("Volume", &cfg_.sound.volumeDb, -30.0f, 6.0f, "%.1f dB", def.sound.volumeDb,
                               "Output volume. The GoXLR fader still works on top of this.");
     if (ve != Edit::None) session_.setVolumeDb(cfg_.sound.volumeDb);
+    if (sliderRow("Bass", &cfg_.sound.bassDb, -12.0f, 6.0f, "%+.1f dB", def.sound.bassDb,
+                  "Level of the game's subwoofer (LFE) channel. 0 dB = as the game mixed it, no bass boost. "
+                  "Lower it if explosions mask footsteps.",
+                  col::Accent) == Edit::Commit)
+        requestRebuild();
     {
         const float w = ImGui::GetContentRegionAvail().x;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
@@ -490,7 +588,7 @@ void App::pageSound() {
 // ------------------------------------------------------------------ Devices page
 void App::pageDevices() {
     topBar("Devices", "Where game audio comes from, and where TacAudio plays it.");
-    const bool locked = session_.running() || busy();
+    const bool locked = wantRunning_ || session_.running() || busy();
     if (locked) {
         ui::text("Turn TacAudio off to change devices.", col::Yellow, 13.5f, true);
         ImGui::Dummy(ImVec2(0, S(4)));
@@ -596,10 +694,48 @@ void App::pagePerformance() {
     }
 }
 
+// ------------------------------------------------------------------ Settings page
+void App::pageSettings() {
+    topBar("Settings", "How TacAudio starts and behaves in the background.");
+    const AppSettings def;
+
+    beginCard("##startup", "Startup", nullptr, 0);
+    if (toggleRow("Start with Windows", &cfg_.startWithWindows, "Launches TacAudio in the tray when you sign in.",
+                  def.startWithWindows))
+        setAutostart(cfg_.startWithWindows);
+    toggleRow("Turn on at launch", &cfg_.autoEngine, "Starts the 3D engine as soon as TacAudio opens.", def.autoEngine);
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    beginCard("##window", "Window & tray", nullptr, 0);
+    toggleRow("Close to tray", &cfg_.closeToTray,
+              "The window's X button keeps TacAudio running in the notification area. Right-click the tray icon to exit.",
+              def.closeToTray);
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    beginCard("##hotkeys", "Hotkeys", nullptr, 0, "Work everywhere, also while a game is in focus.");
+    toggleRow("Enable hotkeys", &cfg_.hotkeys, "Global keyboard shortcuts (see below).", def.hotkeys);
+    ImGui::BeginDisabled(!cfg_.hotkeys);
+    auto keyRow = [&](const char* keys, const char* what) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const ImVec2 ks = fonts.semibold->CalcTextSizeA(S(13), FLT_MAX, 0, keys);
+        dl->AddRectFilled(p + ImVec2(S(104), 0), p + ImVec2(S(104) + ks.x + S(24), S(28)), col::Well, S(6));
+        dl->AddText(fonts.semibold, S(13), p + ImVec2(S(116), S(6)), cfg_.hotkeys ? col::Text : col::Faint, keys);
+        dl->AddText(fonts.regular, S(13.5f), p + ImVec2(S(104) + ks.x + S(40), S(6)), col::Dim, what);
+        ImGui::Dummy(ImVec2(0, S(32)));
+    };
+    keyRow(kHotkeyPower, "Turn TacAudio on / off");
+    keyRow(kHotkey3d, "3D sound on / off (instant A/B against plain stereo)");
+    ImGui::EndDisabled();
+    endCard();
+}
+
 // ------------------------------------------------------------------ About page
 void App::pageAbout() {
     topBar("About", "TacAudio - a spatial audio engine for competitive gaming.");
-    beginCard("##about", "TacAudio 0.4", nullptr, 0);
+    beginCard("##about", "TacAudio " TAC_VERSION, nullptr, 0);
     ui::text("Binaural 3D audio for 7.1 game sound: measured-head HRTFs, diffuse-field equalisation, room "
              "modelling, combat dynamics and footstep clarity.",
              col::Dim, 13.5f);

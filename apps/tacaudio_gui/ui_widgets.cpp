@@ -24,6 +24,7 @@ const char* Refresh = "\xEE\x9C\xAC";    // U+E72C
 const char* Reset = "\xEE\x9E\xA7";      // U+E7A7 (undo arrow)
 const char* Power = "\xEE\x9F\xA8";      // U+E7E8
 const char* Volume = "\xEE\x9D\xA7";     // U+E767
+const char* Settings = "\xEE\x9C\x93";   // U+E713
 }  // namespace icon
 
 namespace {
@@ -429,6 +430,34 @@ bool comboRow(const char* label, std::string* value, const std::vector<std::stri
     }
     ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + S(kRowH)));
     ImGui::Dummy(ImVec2(avail, S(2)));
+    ImGui::PopID();
+    return changed;
+}
+
+bool toggleRow(const char* label, bool* v, const char* description, bool def) {
+    ImGui::PushID(label);
+    const ImVec2 row = ImGui::GetCursorScreenPos();
+    const float avail = ImGui::GetContentRegionAvail().x;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    textAt(dl, ImVec2(row.x, row.y + (S(kRowH) - S(14.5f)) * 0.5f - S(1)), col::Dim, label, 14.5f, false);
+    const float x0 = row.x + S(kLabelW) + S(60);
+    ImGui::SetCursorScreenPos(ImVec2(x0, row.y + (S(kRowH) - S(22)) * 0.5f));
+    bool changed = toggle("##t", v);
+    if (description) {
+        const float dx = x0 + S(56);
+        ImGui::PushClipRect(ImVec2(dx, row.y), ImVec2(row.x + avail - S(kResetW) - S(kGap), row.y + S(kRowH)), true);
+        textAt(dl, ImVec2(dx, row.y + (S(kRowH) - S(13)) * 0.5f - S(1)), col::Faint, description, 13.0f, false);
+        ImGui::PopClipRect();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(row.x + avail - S(kResetW), row.y + (S(kRowH) - S(kResetW)) * 0.5f));
+    const bool disabled = ImGui::GetItemFlags() & ImGuiItemFlags_Disabled;
+    if (iconButton("##reset", icon::Reset, def ? "Reset to default (on)" : "Reset to default (off)", *v != def && !disabled,
+                   kResetW)) {
+        *v = def;
+        changed = true;
+    }
+    ImGui::SetCursorScreenPos(ImVec2(row.x, row.y + S(kRowH)));
+    ImGui::Dummy(ImVec2(avail, S(4)));
     ImGui::PopID();
     return changed;
 }

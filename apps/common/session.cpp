@@ -63,6 +63,7 @@ BinauralConfig AudioSession::makeConfig(const SoundSettings& s) const {
     a.opts["--dynamics"] = s.dynamics;
     a.opts["--punch"] = std::to_string(s.punch);
     a.opts["--footsteps"] = std::to_string(s.footstepsDb);
+    a.opts["--lfe-db"] = std::to_string(s.bassDb);
     a.opts["--gain-db"] = "0";  // volume is applied by the engine (instant, no rebuild)
     return cli::binauralFrom(a, 0.0f, kBlock, s.room, s.dynamics);
 }

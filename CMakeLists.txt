@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
-project(TacAudio VERSION 0.1.0 LANGUAGES CXX)
+project(TacAudio VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# Static C/C++ runtime: the installed app runs without the Visual C++ Redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(TAC_BUILD_TESTS "Build TacAudio unit tests" ON)
 option(TAC_WITH_SOFA "SOFA HRTF import via libmysofa (downloads zlib + libmysofa)" ON)
@@ -112,6 +114,7 @@ if(WIN32)
 
     add_executable(tacaudio apps/tacaudio/main.cpp)
     target_link_libraries(tacaudio PRIVATE tac_cli tac_platform)
+    set_target_properties(tacaudio PROPERTIES OUTPUT_NAME tacaudio-cli)  # TacAudio.exe is the app
 
     add_library(tac_session STATIC apps/common/session.cpp)
     target_link_libraries(tac_session PUBLIC tac_cli tac_platform)
@@ -136,9 +139,14 @@ if(WIN32)
             target_compile_options(tac_imgui PRIVATE /W0)
         endif()
 
+        set(TAC_RES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/apps/tacaudio_gui/res)
+        configure_file(${TAC_RES_DIR}/tacaudio.rc.in ${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc @ONLY)
         add_executable(tacaudio_gui WIN32
-            apps/tacaudio_gui/main.cpp apps/tacaudio_gui/app.cpp apps/tacaudio_gui/ui_widgets.cpp)
+            apps/tacaudio_gui/main.cpp apps/tacaudio_gui/app.cpp apps/tacaudio_gui/ui_widgets.cpp
+            ${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc)
         target_link_libraries(tacaudio_gui PRIVATE tac_session tac_imgui shell32)
+        target_compile_definitions(tacaudio_gui PRIVATE TAC_VERSION="${PROJECT_VERSION}")
+        set_target_properties(tacaudio_gui PROPERTIES OUTPUT_NAME TacAudio)
         if(TAC_WITH_SOFA)  # the GUI finds hrtf/ next to its exe, like tacrender
             add_custom_command(TARGET tacaudio_gui POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:tacaudio_gui>/hrtf
