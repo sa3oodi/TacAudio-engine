@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0b84d8" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
-  <img src="https://img.shields.io/badge/version-0.4.0-ff7a1a" alt="version 0.4.0">
+  <img src="https://img.shields.io/badge/version-0.4.1-ff7a1a" alt="version 0.4.1">
   <img src="https://img.shields.io/badge/tests-336%20checks-2fe3c4" alt="336 test checks">
 </p>
 
@@ -53,7 +53,7 @@ Everything is adjustable live while you play, from a modern dark app with a tray
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.4.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+1. Download **`TacAudio-Setup-0.4.1.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
 2. Run it. It installs for your user only (no administrator rights) into
    `%LOCALAPPDATA%\Programs\TacAudio`, with a Start menu entry and an uninstaller in
    *Settings &rarr; Apps*.
