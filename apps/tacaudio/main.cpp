@@ -37,6 +37,7 @@
 #include <thread>
 #include <vector>
 
+#include "cable_check.h"
 #include "cli.h"
 #include "core/layout.h"
 #include "core/scene.h"
@@ -195,99 +196,20 @@ private:
 // The device is a virtual cable, so nothing is audible.
 int cmdCableTest(const Args& a) {
     wasapi::ComScope com;
-    constexpr std::uint32_t kRate = 48000;
     const auto dev = requireDevice(a.get("--device", "CABLE Input"), true);
-    if (dev.channels < 2) throw std::runtime_error("device reports no channels");
-    const std::size_t C = dev.channels;
-    std::printf("device   : '%s'  %zu ch, mask 0x%X\n", dev.name.c_str(), C, dev.channelMask);
-    const SpeakerLayout layout = layoutFromChannelMask(dev.channelMask ? dev.channelMask : defaultChannelMask(C));
-
-    // Test signal: channel k plays a 1 kHz burst (LFE: 60 Hz) in slot k.
-    const std::size_t slot = kRate * 4 / 10, fade = kRate / 50;
-    const std::size_t total = slot * C + kRate;  // + 1 s tail
-    std::vector<float> signal(total * C, 0.0f);
-    for (std::size_t k = 0; k < C; ++k) {
-        const double f = layout.speakers[k].isLfe ? 60.0 : 1000.0;
-        for (std::size_t i = 0; i < slot; ++i) {
-            const double env = std::min({1.0, static_cast<double>(i) / fade, static_cast<double>(slot - i) / fade});
-            signal[(k * slot + i) * C + k] = static_cast<float>(0.25 * env * std::sin(2 * std::numbers::pi * f * i / kRate));
+    std::printf("device   : '%s'  %u ch, mask 0x%X\n", dev.name.c_str(), dev.channels, dev.channelMask);
+    std::printf("testing  : %u channels x 0.4 s ...\n", dev.channels);
+    const CableTestResult r = runCableTest(dev);
+    if (!r.channels.empty()) {
+        std::printf("\n  sent on   received on     level      cross-talk\n");
+        for (std::size_t k = 0; k < r.channels.size(); ++k) {
+            const auto& c = r.channels[k];
+            std::printf("  %-4s (%zu) -> %-4s   %+6.1f dB   %7.1f dB   %s\n", c.sent.c_str(), k, c.received.c_str(),
+                        c.levelDb, c.crosstalkDb, c.pass ? "ok" : "FAIL");
         }
     }
-
-    wasapi::CaptureStream cap;
-    const auto cf = cap.open(dev, /*loopback=*/true, kRate);
-    if (cf.channels != C) throw std::runtime_error("loopback delivered " + std::to_string(cf.channels) + " channels");
-    std::vector<float> captured((total + 2 * kRate) * C, 0.0f);
-    std::atomic<std::size_t> capFrames{0};
-    cap.start([&](const float* d, std::size_t n, bool silent, std::uint64_t) {
-        const std::size_t at = capFrames.load();
-        const std::size_t room = captured.size() / C - at;
-        n = std::min(n, room);
-        if (!silent && d) std::copy(d, d + n * C, captured.begin() + static_cast<std::ptrdiff_t>(at * C));
-        capFrames.store(at + n);
-    });
-
-    wasapi::RenderStream ren;
-    ren.open(dev, kRate, static_cast<std::uint32_t>(C));
-    std::atomic<std::size_t> playPos{0};
-    ren.start([&](float* out, std::size_t n) {
-        const std::size_t p = playPos.load();
-        for (std::size_t i = 0; i < n; ++i)
-            for (std::size_t c = 0; c < C; ++c) out[i * C + c] = p + i < total ? signal[(p + i) * C + c] : 0.0f;
-        playPos.store(p + n);
-    });
-
-    std::printf("testing  : %zu channels x 0.4 s ...\n", C);
-    while (playPos.load() < total + kRate / 2 && !ren.failed() && !cap.failed())
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    ren.stop();
-    cap.stop();
-    if (ren.failed()) throw std::runtime_error("render: " + ren.error());
-    if (cap.failed()) throw std::runtime_error("capture: " + cap.error());
-
-    // Align on the first captured sample above -30 dBFS.
-    const std::size_t got = capFrames.load();
-    std::size_t t0 = got;
-    for (std::size_t i = 0; i < got && t0 == got; ++i)
-        for (std::size_t c = 0; c < C; ++c)
-            if (std::abs(captured[i * C + c]) > 0.03f) {
-                t0 = i;
-                break;
-            }
-    if (t0 == got) {
-        std::printf("\nFAIL: nothing came back through loopback (is the device muted, or 'Spatial sound' enabled on it?)\n");
-        return 1;
-    }
-    // Back up to the slot start (the burst fades in over `fade` samples).
-    t0 = t0 > fade ? t0 - fade / 2 : 0;
-
-    bool ok = true;
-    std::printf("\n  sent on   received on     level      cross-talk\n");
-    for (std::size_t k = 0; k < C; ++k) {
-        std::vector<double> e(C, 0.0);
-        const std::size_t s = t0 + k * slot + 2 * fade, end = t0 + (k + 1) * slot - 2 * fade;
-        for (std::size_t i = s; i < end && i < got; ++i)
-            for (std::size_t c = 0; c < C; ++c) e[c] += static_cast<double>(captured[i * C + c]) * captured[i * C + c];
-        const std::size_t best = static_cast<std::size_t>(std::max_element(e.begin(), e.end()) - e.begin());
-        double other = 0;
-        std::size_t otherCh = best;
-        for (std::size_t c = 0; c < C; ++c)
-            if (c != best && e[c] > other) {
-                other = e[c];
-                otherCh = c;
-            }
-        if (a.has("--verbose")) std::printf("  [slot %zu: strongest leak on ch %zu]\n", k, otherCh);
-        const double n = static_cast<double>(end - s);
-        const double levelDb = 10 * std::log10(std::max(e[best] / n, 1e-12) / (0.25 * 0.25 / 2));  // re. sent RMS
-        const double xtalkDb = 10 * std::log10(std::max(other, 1e-20) / std::max(e[best], 1e-20));
-        const bool pass = best == k && std::abs(levelDb) < 1.0 && xtalkDb < -40.0;
-        ok &= pass;
-        std::printf("  %-4s (%zu) -> %-4s (%zu)   %+6.1f dB   %7.1f dB   %s\n", layout.speakers[k].name.c_str(), k,
-                    layout.speakers[best].name.c_str(), best, levelDb, xtalkDb, pass ? "ok" : "FAIL");
-    }
-    std::printf("\n%s\n", ok ? "PASS: all channels arrive separately and unchanged - the 7.1 path works."
-                              : "FAIL: some channels are missing, swapped or mixed (see above).");
-    return ok ? 0 : 1;
+    std::printf("\n%s: %s\n", r.pass ? "PASS" : "FAIL", r.message.c_str());
+    return r.pass ? 0 : 1;
 }
 
 // Detects the onsets of short clicks in a stream, timestamped with the audio clock (seconds).

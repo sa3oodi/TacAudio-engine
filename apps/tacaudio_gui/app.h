@@ -1,12 +1,15 @@
 #pragma once
-// TacAudio app UI: state, settings persistence and the pages (Sound, Devices, Performance, About).
+// TacAudio app UI: state, settings persistence and the pages (Sound, Devices, Setup, Performance,
+// Settings, About).
 
 #include <chrono>
 #include <deque>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "cable_check.h"
 #include "session.h"
 
 namespace tac {
@@ -24,6 +27,7 @@ struct AppSettings {
     bool autoEngine = true;         // turn the engine on when the app starts
     bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
     bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
+    bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
@@ -60,6 +64,7 @@ public:
 
     static constexpr const char* kHotkeyPower = "Ctrl + Alt + F10";
     static constexpr const char* kHotkey3d = "Ctrl + Alt + F9";
+    static constexpr int kPageSetup = 5;
 
 private:
     void sidebar();
@@ -70,12 +75,16 @@ private:
     void pagePerformance();
     void pageSettings();
     void pageAbout();
+    void pageSetup();
+    void finishSetup(bool turnOn);
 
     void startStop();
     void supervise();  // reconnect after device loss / failed start
     void requestRebuild() { wantRebuild_ = true; }
     void pollBackground();
     void refreshDevices();
+    void setDeviceList(std::vector<wasapi::DeviceInfo> list);
+    void pollSetupJobs();
     bool busy() const;
     template <typename F>
     void launch(const char* label, F fn);
@@ -99,6 +108,14 @@ private:
     double peakHoldL_ = 0, peakHoldR_ = 0;
 
     std::vector<std::string> outputs_;
+    std::vector<wasapi::DeviceInfo> devInfos_;
+
+    // Setup assistant: background device scans and the cable test.
+    std::future<std::vector<wasapi::DeviceInfo>> scanJob_;
+    std::chrono::steady_clock::time_point lastScan_{};
+    std::future<CableTestResult> testJob_;
+    std::optional<CableTestResult> testResult_;
+    std::string testError_;
     std::vector<std::string> headNames_, headDescs_;
 };
 

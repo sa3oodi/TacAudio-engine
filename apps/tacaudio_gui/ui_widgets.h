@@ -56,6 +56,8 @@ extern const char* Reset;
 extern const char* Power;
 extern const char* Volume;
 extern const char* Settings;
+extern const char* Setup;
+extern const char* Check;
 }  // namespace icon
 
 // ------------------------------------------------------------------ text helpers

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(TacAudio VERSION 0.4.1 LANGUAGES CXX)
+project(TacAudio VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -113,10 +113,10 @@ if(WIN32)
     target_link_libraries(tac_platform PUBLIC ole32 avrt)
 
     add_executable(tacaudio apps/tacaudio/main.cpp)
-    target_link_libraries(tacaudio PRIVATE tac_cli tac_platform)
+    target_link_libraries(tacaudio PRIVATE tac_session)
     set_target_properties(tacaudio PROPERTIES OUTPUT_NAME tacaudio-cli)  # TacAudio.exe is the app
 
-    add_library(tac_session STATIC apps/common/session.cpp)
+    add_library(tac_session STATIC apps/common/session.cpp apps/common/cable_check.cpp)
     target_link_libraries(tac_session PUBLIC tac_cli tac_platform)
 
     # ------------------------------------------------------------ GUI (Dear ImGui, Win32 + D3D11)

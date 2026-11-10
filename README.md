@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0b84d8" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
-  <img src="https://img.shields.io/badge/version-0.4.1-ff7a1a" alt="version 0.4.1">
+  <img src="https://img.shields.io/badge/version-0.5.0-ff7a1a" alt="version 0.5.0">
   <img src="https://img.shields.io/badge/tests-336%20checks-2fe3c4" alt="336 test checks">
 </p>
 
@@ -48,12 +48,13 @@ Everything is adjustable live while you play, from a modern dark app with a tray
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB |
 | ⚡ **Low latency** | ~25 ms added in exclusive mode; glitch-free adaptive buffering with clock-drift compensation |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
+| 🧭 **Setup assistant** | Detects VB-CABLE and its 7.1 setting, opens the right Windows dialogs, tests all 8 channels, picks your headphones |
 | 🖥️ **Everyday app** | Tray icon, start with Windows, global hotkeys, automatic reconnect when a device resets, per-option reset buttons |
 | 📊 **Performance page** | Live latency, buffer, CPU, glitch counters and history |
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.4.1.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+1. Download **`TacAudio-Setup-0.5.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
 2. Run it. It installs for your user only (no administrator rights) into
    `%LOCALAPPDATA%\Programs\TacAudio`, with a Start menu entry and an uninstaller in
    *Settings &rarr; Apps*.
@@ -64,7 +65,18 @@ Everything is adjustable live while you play, from a modern dark app with a tray
 ### One-time game setup
 
 Games have to output 7.1 into a device TacAudio can read. Until TacAudio ships its own virtual
-audio driver, this is the free **VB-CABLE**:
+audio driver, this is the free **VB-CABLE**.
+
+**TacAudio's Setup assistant does the checking for you.** It opens on first launch (and any time
+from the *Setup* page): it detects whether VB-CABLE is installed and set to 7.1, opens the right
+Windows dialogs, runs an inaudible 8-channel test and picks your headphones. Each step ticks off by
+itself as you complete it.
+
+<p align="center">
+  <img src="docs/images/screenshot-setup.png" width="720" alt="Setup assistant">
+</p>
+
+The same steps by hand:
 
 1. Install [VB-CABLE](https://vb-audio.com/Cable/) (run `VBCABLE_Setup_x64.exe` as administrator, then restart).
 2. `Win + R` &rarr; `mmsys.cpl` &rarr; *Playback* &rarr; **CABLE Input** &rarr; *Configure* &rarr; **7.1 Surround**;
@@ -74,7 +86,7 @@ audio driver, this is the free **VB-CABLE**:
 5. In TacAudio's **Devices** page pick *CABLE Input* as source and your headphones as output, then
    switch TacAudio **ON** (top right).
 
-`tacaudio-cli cable-test` verifies that all 8 channels arrive separately (it is inaudible).
+`tacaudio-cli cable-test` runs the same 8-channel test from the command line.
 
 ## Using TacAudio
 
@@ -82,6 +94,7 @@ audio driver, this is the free **VB-CABLE**:
 |---|---|
 | **Sound** | Head, room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
 | **Devices** | Game audio source, headphone output, exclusive mode (lowest latency) |
+| **Setup** | Setup assistant: VB-CABLE, 7.1, channel test, headphones, game routing |
 | **Performance** | Latency, buffer, CPU, glitches, how much loud sound is tamed / quiet sound lifted |
 | **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys |
 

@@ -8,8 +8,9 @@
 #include <fstream>
 #include <numbers>
 
-#include <shlobj.h>
 #include <windows.h>
+#include <shellapi.h>
+#include <shlobj.h>
 
 #include "cli.h"
 #include "core/biquad.h"
@@ -49,6 +50,8 @@ float toDb(float lin) { return lin > 1e-6f ? 20.0f * std::log10(lin) : -120.0f; 
 AppSettings loadSettings() {
     AppSettings s;
     std::ifstream f(settingsPath());
+    // Settings written before the setup assistant existed belong to users who are set up already.
+    s.setupDone = f.is_open();
     std::string line;
     while (std::getline(f, line)) {
         const auto eq = line.find('=');
@@ -71,6 +74,7 @@ AppSettings loadSettings() {
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
+            else if (k == "setupDone") s.setupDone = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -118,7 +122,8 @@ void saveSettings(const AppSettings& s) {
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
       << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
-      << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0) << "\n";
+      << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
+      << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\n";
 }
 
 // ------------------------------------------------------------------ app
@@ -151,6 +156,31 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         meterR_ = -19;
         peakL_ = -9;
         peakR_ = -13;
+
+        // Setup assistant: cable installed, 7.1, test passed.
+        wasapi::DeviceInfo cable, phones;
+        cable.name = "CABLE Input (VB-Audio Virtual Cable)";
+        cable.channels = 8;
+        cable.sampleRate = 48000;
+        cable.channelMask = 0x63F;
+        phones.name = "Game (TC-HELICON GoXLR Mini)";
+        phones.channels = 2;
+        phones.sampleRate = 48000;
+        phones.isDefault = true;
+        // Dev screenshots of unfinished steps: TACAUDIO_PREVIEW_SETUP=nocable | stereo.
+        char demo[16] = {};
+        GetEnvironmentVariableA("TACAUDIO_PREVIEW_SETUP", demo, sizeof(demo));
+        if (std::string(demo) == "stereo") cable.channels = 2;
+        if (std::string(demo) == "nocable") setDeviceList({phones});
+        else setDeviceList({cable, phones});
+        cfg_.dev.source = cable.name;
+        cfg_.dev.output = phones.name;
+        if (demo[0]) return;
+        CableTestResult t;
+        t.pass = true;
+        t.message = "All 8 channels arrive separately and unchanged.";
+        for (const char* n : {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"}) t.channels.push_back({n, n, 0.0, -96.0, true});
+        testResult_ = t;
     }
 }
 
@@ -177,12 +207,17 @@ void App::launch(const char* label, F fn) {
 }
 
 void App::refreshDevices() {
-    outputs_.clear();
     try {
-        for (const auto& d : wasapi::listDevices(true)) outputs_.push_back(d.name);
+        setDeviceList(wasapi::listDevices(true));
     } catch (const std::exception& e) {
         error_ = e.what();
     }
+}
+
+void App::setDeviceList(std::vector<wasapi::DeviceInfo> list) {
+    devInfos_ = std::move(list);
+    outputs_.clear();
+    for (const auto& d : devInfos_) outputs_.push_back(d.name);
     auto resolve = [&](std::string& v) {  // stored short names -> full device names
         for (const auto& o : outputs_)
             if (o == v) return;
@@ -216,6 +251,10 @@ void App::toggle3d() {
 }
 
 void App::autoStartIfEnabled() {
+    if (!cfg_.setupDone) {  // first launch: guide the user instead of starting with no cable
+        page_ = kPageSetup;
+        return;
+    }
     if (cfg_.autoEngine && !wantRunning_) startStop();
 }
 
@@ -265,6 +304,7 @@ void App::pollBackground() {
         }
         lastJobWasStart_ = false;
     }
+    pollSetupJobs();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
         wantRebuild_ = false;
@@ -306,7 +346,7 @@ void App::pollBackground() {
                          cfg_.sound.volumeDb != saved_.sound.volumeDb || cfg_.sound.enabled3d != saved_.sound.enabled3d ||
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
                          cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
-                         cfg_.hotkeys != saved_.hotkeys;
+                         cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -341,6 +381,7 @@ void App::frame() {
         case 1: pageDevices(); break;
         case 2: pagePerformance(); break;
         case 3: pageSettings(); break;
+        case kPageSetup: pageSetup(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -373,10 +414,11 @@ void App::sidebar() {
     ImGui::SetCursorScreenPos(ImVec2(lp.x - S(8), lp.y + S(66)));
     ImGui::Dummy(ImVec2(0, 0));
 
-    const char* glyphs[] = {icon::Audio, icon::Devices, icon::Gauge, icon::Settings, icon::Info};
-    const char* labels[] = {"Sound", "Devices", "Performance", "Settings", "About"};
-    for (int i = 0; i < 5; ++i)
-        if (navItem(glyphs[i], labels[i], page_ == i)) page_ = i;
+    const char* glyphs[] = {icon::Audio, icon::Devices, icon::Setup, icon::Gauge, icon::Settings, icon::Info};
+    const char* labels[] = {"Sound", "Devices", "Setup", "Performance", "Settings", "About"};
+    const int pages[] = {0, 1, kPageSetup, 2, 3, 4};
+    for (int i = 0; i < 6; ++i)
+        if (navItem(glyphs[i], labels[i], page_ == pages[i])) page_ = pages[i];
 
     // Engine status at the bottom of the sidebar.
     const float h = ImGui::GetWindowHeight();
@@ -628,6 +670,9 @@ void App::pageDevices() {
     ImGui::Dummy(ImVec2(0, S(6)));
     if (pillButton("Refresh devices", col::Card, col::Text, S(170))) refreshDevices();
     ImGui::EndDisabled();
+    ImGui::SameLine(0, S(10));
+    if (pillButton("Setup assistant", col::Card, col::Text, S(170))) page_ = kPageSetup;
+    if (ImGui::IsItemHovered()) tooltip("Step-by-step check of VB-CABLE, 7.1 and your devices");
 }
 
 // ------------------------------------------------------------------ Performance page
@@ -730,6 +775,210 @@ void App::pageSettings() {
     keyRow(kHotkey3d, "3D sound on / off (instant A/B against plain stereo)");
     ImGui::EndDisabled();
     endCard();
+}
+
+// ------------------------------------------------------------------ Setup assistant
+namespace {
+void openShell(const wchar_t* file, const wchar_t* params = nullptr) {
+    ShellExecuteW(nullptr, L"open", file, params, nullptr, SW_SHOWNORMAL);
+}
+
+// Wrapped paragraph.
+void para(const char* s, ImU32 color = col::Dim, float size = 13.5f) {
+    ImGui::PushFont(fonts.regular, size);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(s);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+// Primary (orange) or secondary button; drawn greyed out and inert when disabled.
+bool actionButton(const char* label, bool primary, bool enabled = true, float width = 0.0f) {
+    const ImU32 bg = !enabled ? col::Well : primary ? col::Accent : col::CardHi;
+    const ImU32 fg = !enabled ? col::Faint : primary ? IM_COL32(20, 14, 8, 255) : col::Text;
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = pillButton(label, bg, fg, width);
+    ImGui::EndDisabled();
+    return clicked && enabled;
+}
+
+enum class Step { Done, Todo, Warn, Locked };
+
+// "Step n" status line at the top of a step card.
+void stepStatus(Step st, const char* label) {
+    const ImU32 dot = st == Step::Done ? col::Green : st == Step::Warn ? col::Yellow : st == Step::Todo ? col::Red : col::Faint;
+    chip(label, dot);
+}
+}  // namespace
+
+void App::pollSetupJobs() {
+    using namespace std::chrono;
+    auto ready = [](auto& f) { return f.valid() && f.wait_for(seconds(0)) == std::future_status::ready; };
+    if (ready(scanJob_)) {
+        try {
+            setDeviceList(scanJob_.get());
+        } catch (const std::exception&) {
+            // keep the previous list; the next scan retries
+        }
+    }
+    if (ready(testJob_)) {
+        try {
+            testResult_ = testJob_.get();
+        } catch (const std::exception& e) {
+            testResult_.reset();
+            testError_ = e.what();
+        }
+        lastScan_ = {};  // rescan right away (the format may have changed)
+    }
+    // While the assistant is open, rescan devices every 2 s so steps tick off by themselves
+    // (e.g. after the user switches the cable to 7.1 in the Sound control panel).
+    const auto now = steady_clock::now();
+    if (!preview_ && page_ == kPageSetup && !scanJob_.valid() && !testJob_.valid() && now - lastScan_ > seconds(2)) {
+        lastScan_ = now;
+        scanJob_ = std::async(std::launch::async, [] {
+            wasapi::ComScope com;
+            return wasapi::listDevices(true);
+        });
+    }
+}
+
+void App::finishSetup(bool turnOn) {
+    if (const auto cable = findCable(devInfos_)) cfg_.dev.source = cable->name;
+    cfg_.setupDone = true;
+    saveSettings(cfg_);
+    saved_ = cfg_;
+    page_ = 0;
+    if (turnOn && !wantRunning_) startStop();
+}
+
+void App::pageSetup() {
+    topBar("Setup assistant", "Get your game's 7.1 sound into TacAudio. Steps tick off by themselves as you go.");
+    const auto cable = findCable(devInfos_);
+    const bool has71 = cable && isSevenOne(*cable);
+    const bool testing = testJob_.valid();
+    const bool engineOn = wantRunning_ || session_.running() || busy();
+    char buf[256];
+
+    // --- 1. VB-CABLE installed | 2. Set to 7.1  (side by side)
+    const float colW = (ImGui::GetContentRegionAvail().x - S(16)) * 0.5f;
+    beginCard("##s1", "1  Install VB-CABLE", nullptr, colW,
+              "VB-CABLE is a free virtual audio device by VB-Audio. Your game plays into it and TacAudio "
+              "picks the sound up from there.");
+    if (cable) {
+        std::snprintf(buf, sizeof(buf), "Installed: %s", cable->name.c_str());
+        stepStatus(Step::Done, buf);
+        para("Free virtual audio device by VB-Audio.", col::Faint, 12.5f);
+    } else {
+        stepStatus(Step::Todo, "Not installed yet");
+        para("Download VB-CABLE, extract the zip, right-click VBCABLE_Setup_x64.exe > Run as administrator > "
+             "Install Driver, then restart Windows. TacAudio notices it automatically.");
+        if (actionButton("Download VB-CABLE", true)) openShell(L"https://vb-audio.com/Cable/");
+        ImGui::SameLine(0, S(10));
+        if (actionButton("Check again", false)) lastScan_ = {};
+    }
+    endCard();
+    ImGui::SameLine(0, S(16));
+
+    beginCard("##s2", "2  Set the cable to 7.1", nullptr, colW,
+              "Games only send surround sound to devices configured as 7.1.");
+    if (!cable) {
+        stepStatus(Step::Locked, "Waiting for step 1");
+    } else if (has71) {
+        std::snprintf(buf, sizeof(buf), "7.1 Surround (8 channels), %u Hz", cable->sampleRate);
+        stepStatus(cable->sampleRate == 48000 ? Step::Done : Step::Warn, buf);
+        if (cable->sampleRate == 48000) para("Ready for surround sound.", col::Faint, 12.5f);
+        else
+            para("Works, but 48000 Hz is recommended: CABLE Input > Properties > Advanced > a 48000 Hz format.",
+                 col::Yellow, 12.5f);
+    } else {
+        std::snprintf(buf, sizeof(buf), "Currently %u channels - needs 7.1", cable->channels);
+        stepStatus(Step::Todo, buf);
+        para("In the Sound window that opens: Playback tab > CABLE Input > Configure > 7.1 Surround > Next > Finish. "
+             "Then CABLE Input > Properties > Advanced > choose a 48000 Hz format > OK.");
+        if (actionButton("Open Sound settings", true)) openShell(L"rundll32.exe", L"shell32.dll,Control_RunDLL mmsys.cpl,,0");
+        ImGui::SameLine(0, S(10));
+        if (actionButton("Check again", false)) lastScan_ = {};
+    }
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    // --- 3. Test
+    beginCard("##s3", "3  Test the 7.1 path", nullptr, 0,
+              "Sends a short tone through each of the 8 channels of the cable and checks they all come back "
+              "separately. Inaudible - nothing plays on your headphones.");
+    if (!has71) {
+        stepStatus(Step::Locked, "Waiting for step 2");
+    } else {
+        if (testing) {
+            spinner(S(9), col::Accent);
+            ImGui::SameLine(0, S(10));
+            ui::text("Testing 8 channels (about 5 s)...", col::Dim, 13.5f);
+        } else if (testResult_) {
+            stepStatus(testResult_->pass ? Step::Done : Step::Todo, testResult_->message.c_str());
+        } else if (!testError_.empty()) {
+            stepStatus(Step::Todo, ("Test failed: " + testError_).c_str());
+        } else {
+            stepStatus(Step::Warn, "Not tested yet (optional, recommended)");
+        }
+        if (testResult_ && !testResult_->channels.empty() && !testing) {
+            for (std::size_t i = 0; i < testResult_->channels.size(); ++i) {
+                const auto& c = testResult_->channels[i];
+                if (i) ImGui::SameLine(0, S(6));
+                std::snprintf(buf, sizeof(buf), "%s %s", c.sent.c_str(), c.pass ? "ok" : "fail");
+                chip(buf, c.pass ? col::Green : col::Red);
+            }
+        }
+        if (engineOn) para("Turn TacAudio off (top right) to run the test.", col::Yellow, 12.5f);
+        if (actionButton(testResult_ ? "Run again" : "Run test", !testResult_, !testing && !engineOn && !preview_)) {
+            testResult_.reset();
+            testError_.clear();
+            const wasapi::DeviceInfo dev = *cable;
+            testJob_ = std::async(std::launch::async, [dev] {
+                wasapi::ComScope com;
+                return runCableTest(dev);
+            });
+        }
+    }
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    // --- 4. Headphones + game routing
+    beginCard("##s4", "4  Connect your game and headphones", nullptr, 0);
+    std::vector<std::string> phones;
+    std::string suggested;
+    for (const auto& d : devInfos_) {
+        if (d.name.find("CABLE") != std::string::npos) continue;
+        phones.push_back(d.name);
+        if (d.isDefault) suggested = d.name;
+    }
+    if (suggested.empty() && !phones.empty()) suggested = phones.front();
+    if (std::find(phones.begin(), phones.end(), cfg_.dev.output) == phones.end() && !suggested.empty())
+        cfg_.dev.output = suggested;
+    ImGui::BeginDisabled(engineOn);
+    comboRow("Headphones", &cfg_.dev.output, phones, nullptr, std::string(),
+             "Where you listen. TacAudio plays its 3D mix here.");
+    ImGui::EndDisabled();
+    para("1.  Windows Settings > System > Sound > Volume mixer: set your game's output device to CABLE Input. "
+         "Keep Discord and your browser on your headphones.\n"
+         "2.  In the game's audio settings choose 7.1 / Surround / Home theater, and turn off the game's own "
+         "3D-headphone mode.",
+         col::Dim, 13.5f);
+    if (actionButton("Open Volume mixer", false)) openShell(L"ms-settings:apps-volume");
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(10)));
+
+    // --- Finish
+    const bool ready = has71 && !cfg_.dev.output.empty() && !testing;
+    if (actionButton("Finish and turn on", true, ready, S(200)) && !preview_) finishSetup(true);
+    ImGui::SameLine(0, S(10));
+    if (actionButton(cfg_.setupDone ? "Close" : "Skip for now", false, true, S(140)) && !preview_) finishSetup(false);
+    if (!ready && !testing) {
+        ImGui::SameLine(0, S(14));
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
+        ui::text("Finish steps 1 and 2 first.", col::Faint, 12.5f);
+    }
 }
 
 // ------------------------------------------------------------------ About page

@@ -25,6 +25,8 @@ const char* Reset = "\xEE\x9E\xA7";      // U+E7A7 (undo arrow)
 const char* Power = "\xEE\x9F\xA8";      // U+E7E8
 const char* Volume = "\xEE\x9D\xA7";     // U+E767
 const char* Settings = "\xEE\x9C\x93";   // U+E713
+const char* Setup = "\xEE\xA4\x8F";      // U+E90F (wrench)
+const char* Check = "\xEE\x9C\xBE";      // U+E73E (check mark)
 }  // namespace icon
 
 namespace {

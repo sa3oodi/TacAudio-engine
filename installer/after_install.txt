@@ -1,4 +1,6 @@
-TacAudio is installed. One-time setup for games (about 3 minutes):
+TacAudio is installed. One-time setup for games (about 3 minutes).
+TacAudio's Setup assistant opens on first launch and checks each step for you;
+here is the same list for reference:
 
 1. Install VB-CABLE (free) from https://vb-audio.com/Cable/
    Extract the zip, right-click VBCABLE_Setup_x64.exe > Run as administrator > Install,
