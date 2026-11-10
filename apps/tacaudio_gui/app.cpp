@@ -175,12 +175,30 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         else setDeviceList({cable, phones});
         cfg_.dev.source = cable.name;
         cfg_.dev.output = phones.name;
-        if (demo[0]) return;
+        if (demo[0]) {
+            setupMode_ = 1;  // the cable-step demos
+            return;
+        }
         CableTestResult t;
         t.pass = true;
         t.message = "All 8 channels arrive separately and unchanged.";
         for (const char* n : {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"}) t.channels.push_back({n, n, 0.0, -96.0, true});
         testResult_ = t;
+
+        // Direct mode (the main mode): engine installed, a game sending 7.1.
+        direct_ = true;
+        apoctl::Status st;
+        st.streams = 2;
+        st.channels = 8;
+        st.inDb = {-9.0f, -12.0f, -18.0f, -26.0f, -14.0f, -22.0f, -11.0f, -19.0f};
+        st.outLDb = -14.0f;
+        st.outRDb = -19.0f;
+        st.dynMinDb = -11.8f;
+        st.dynMaxDb = 5.6f;
+        apoStatus_ = st;
+        status_.latencyMs = 4.0;
+        status_.source = "Game audio: 7.1 surround";
+        status_.output = phones.name + " (Direct mode)";
     }
 }
 
