@@ -154,6 +154,15 @@ if(WIN32)
                 VERBATIM)
         endif()
     endif()
+
+    # ------------------------------------------------------------ APO prototype (audio-engine add-on)
+    add_library(tac_apo SHARED apps/apo/tac_apo.cpp apps/apo/tac_apo.def)
+    target_link_libraries(tac_apo PRIVATE ole32 advapi32 shell32)
+    set_target_properties(tac_apo PROPERTIES OUTPUT_NAME TacAudioApo)
+    add_executable(tacapo_setup apps/apo/setup.cpp)
+    target_link_libraries(tacapo_setup PRIVATE tac_platform advapi32 ole32)
+    set_target_properties(tacapo_setup PROPERTIES OUTPUT_NAME tacapo-setup)
+    add_dependencies(tacapo_setup tac_apo)
 endif()
 
 # ---------------------------------------------------------------- tests
