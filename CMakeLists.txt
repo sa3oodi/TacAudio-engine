@@ -116,8 +116,8 @@ if(WIN32)
     target_link_libraries(tacaudio PRIVATE tac_session)
     set_target_properties(tacaudio PROPERTIES OUTPUT_NAME tacaudio-cli)  # TacAudio.exe is the app
 
-    add_library(tac_session STATIC apps/common/session.cpp apps/common/cable_check.cpp)
-    target_link_libraries(tac_session PUBLIC tac_cli tac_platform)
+    add_library(tac_session STATIC apps/common/session.cpp apps/common/cable_check.cpp apps/common/apo_control.cpp)
+    target_link_libraries(tac_session PUBLIC tac_cli tac_platform shell32)
 
     # ------------------------------------------------------------ GUI (Dear ImGui, Win32 + D3D11)
     if(TAC_WITH_GUI)

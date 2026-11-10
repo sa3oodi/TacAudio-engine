@@ -67,9 +67,16 @@ Filename: "{app}\TacAudio.exe"; Description: "Launch TacAudio"; Flags: nowait po
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM TacAudio.exe /F"; Flags: runhidden; RunOnceId: "StopTacAudio"
 
 [Code]
-// The app can also create the Run entry itself (Settings > Start with Windows): always remove it.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Code: Integer;
 begin
+  // Direct mode: if the engine add-on is installed in Windows audio, remove it first (restores the
+  // device's original effects). Needs administrator rights, so Windows asks once.
+  if (CurUninstallStep = usUninstall) and
+     RegKeyExists(HKLM64, 'SOFTWARE\Classes\CLSID\{1A057EE8-C9EB-451B-9A59-F6D6FC460F7A}') then
+    ShellExec('runas', ExpandConstant('{app}\tacapo-setup.exe'), 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  // The app can also create the Run entry itself (Settings > Start with Windows): always remove it.
   if CurUninstallStep = usPostUninstall then
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'TacAudio');
 end;

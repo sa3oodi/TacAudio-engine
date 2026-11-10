@@ -60,6 +60,7 @@ ApoSettings readSettings(const std::filesystem::path& file) {
             else if (k == "stepsOn") stepsOn = v == "1";
             else if (k == "stepsLevel") steps = std::stof(v);
             else if (k == "bass") s.bassDb = std::stof(v);
+            else if (k == "enabled") s.enabled = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -107,6 +108,8 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     targetGain_ = gain_;
     target3d_ = s.enabled3d;
     mix3d_ = s.enabled3d ? 1.0f : 0.0f;
+    targetOn_ = s.enabled;
+    mixOn_ = s.enabled ? 1.0f : 0.0f;
     thread_ = std::thread([this] { worker(); });
 }
 
@@ -128,7 +131,7 @@ void ApoEngine::worker() {
     while (!stop_) {
         delete retired_.exchange(nullptr);
         std::this_thread::sleep_for(milliseconds(50));
-        if (steady_clock::now() - lastCheck < milliseconds(300)) continue;
+        if (steady_clock::now() - lastCheck < milliseconds(100)) continue;
         lastCheck = steady_clock::now();
 
         std::error_code ec;
@@ -138,6 +141,7 @@ void ApoEngine::worker() {
         const ApoSettings s = readSettings(settingsFile_);
         targetGain_ = dbToLin(s.volumeDb);
         target3d_ = s.enabled3d;
+        targetOn_ = s.enabled;
         if (built && !s.needsRebuild(have)) {
             have = s;
             continue;
@@ -214,27 +218,61 @@ void ApoEngine::renderBlock() noexcept {
     }
 
     // 3D on/off blend with the plain downmix, and volume (both smoothed, click-free).
+    // Power off = the plain downmix at unity gain (as if TacAudio were not there).
     const float tgt3d = target3d_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float tgtOn = targetOn_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     const float tgtGain = targetGain_.load(std::memory_order_relaxed);
-    const float step3d = static_cast<float>(1.0 / (0.01 * rate_));
+    const float step = static_cast<float>(1.0 / (0.01 * rate_));
     const float coef = static_cast<float>(1.0 - std::exp(-1.0 / (0.01 * rate_)));
+    auto ramp = [step](float& v, float target) {
+        if (v != target) v = target > v ? std::min(target, v + step) : std::max(target, v - step);
+    };
     for (std::size_t i = 0; i < kBlock; ++i) {
-        if (mix3d_ != tgt3d) mix3d_ = tgt3d > mix3d_ ? std::min(tgt3d, mix3d_ + step3d) : std::max(tgt3d, mix3d_ - step3d);
+        ramp(mix3d_, tgt3d);
+        ramp(mixOn_, tgtOn);
         gain_ += (tgtGain - gain_) * coef;
         float l = tmpL_[i], r = tmpR_[i];
-        if (mix3d_ < 1.0f && cur_) {
+        if ((mix3d_ < 1.0f || mixOn_ < 1.0f) && cur_) {
             float dl = 0.0f, dr = 0.0f;
             for (std::uint32_t c = 0; c < inCh_; ++c) {
                 dl += downL_[c] * inBlock_[c][i];
                 dr += downR_[c] * inBlock_[c][i];
             }
-            l = mix3d_ * l + (1.0f - mix3d_) * dl;
-            r = mix3d_ * r + (1.0f - mix3d_) * dr;
+            l = (mix3d_ * l + (1.0f - mix3d_) * dl) * gain_;
+            r = (mix3d_ * r + (1.0f - mix3d_) * dr) * gain_;
+            l = mixOn_ * l + (1.0f - mixOn_) * dl;
+            r = mixOn_ * r + (1.0f - mixOn_) * dr;
+        } else {
+            l *= gain_;
+            r *= gain_;
         }
-        tmpL_[i] = l * gain_;
-        tmpR_[i] = r * gain_;
+        tmpL_[i] = l;
+        tmpR_[i] = r;
     }
     limiter_.process(tmpL_.data(), tmpR_.data(), kBlock);
+
+    // Stats for the app (atomics only).
+    float pl = 0.0f, pr = 0.0f;
+    for (std::size_t i = 0; i < kBlock; ++i) {
+        pl = std::max(pl, std::fabs(tmpL_[i]));
+        pr = std::max(pr, std::fabs(tmpR_[i]));
+    }
+    auto raise = [](std::atomic<float>& a, float v) {
+        float c = a.load(std::memory_order_relaxed);
+        while (v > c && !a.compare_exchange_weak(c, v, std::memory_order_relaxed)) {
+        }
+    };
+    raise(peakL_, pl);
+    raise(peakR_, pr);
+    if (cur_ && ++statBlocks_ >= 8) {
+        statBlocks_ = 0;
+        float mn = 0.0f, mx = 0.0f;
+        cur_->takeDynamicsStats(mn, mx);
+        float c = dynMin_.load(std::memory_order_relaxed);
+        while (mn < c && !dynMin_.compare_exchange_weak(c, mn, std::memory_order_relaxed)) {
+        }
+        raise(dynMax_, mx);
+    }
 
     for (std::size_t i = 0; i < kBlock; ++i) {
         qL_[qWrite_] = tmpL_[i];
@@ -242,6 +280,13 @@ void ApoEngine::renderBlock() noexcept {
         qWrite_ = (qWrite_ + 1) % qL_.size();
     }
     qCount_ += kBlock;
+}
+
+void ApoEngine::takeStats(float& peakL, float& peakR, float& dynMinDb, float& dynMaxDb) noexcept {
+    peakL = peakL_.exchange(0.0f);
+    peakR = peakR_.exchange(0.0f);
+    dynMinDb = dynMin_.exchange(0.0f);
+    dynMaxDb = dynMax_.exchange(0.0f);
 }
 
 void ApoEngine::process(const float* in, float* out, std::uint32_t n, std::uint32_t outCh) noexcept {

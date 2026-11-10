@@ -106,19 +106,62 @@ void apoLog(const char* fmt, ...) {
 
 namespace {
 
+// ------------------------------------------------------------------ status for the app
+// Shared by every APO instance in this process (a game usually opens several streams).
+// Written about 8x per second to %ProgramData%\TacAudio\apo_status.ini.
+std::atomic<float> g_inPeak[8] = {};
+std::atomic<float> g_outL{0.0f}, g_outR{0.0f}, g_dynMin{0.0f}, g_dynMax{0.0f};
+std::atomic<int> g_streams{0};
+std::atomic<unsigned> g_inChannels{0};
+std::atomic<unsigned long long> g_lastStatus{0};
+
+void raiseAtomic(std::atomic<float>& a, float v) {
+    float c = a.load(std::memory_order_relaxed);
+    while (v > c && !a.compare_exchange_weak(c, v, std::memory_order_relaxed)) {
+    }
+}
+void lowerAtomic(std::atomic<float>& a, float v) {
+    float c = a.load(std::memory_order_relaxed);
+    while (v < c && !a.compare_exchange_weak(c, v, std::memory_order_relaxed)) {
+    }
+}
+float toDb(float lin) { return lin > 1e-6f ? 20.0f * std::log10(lin) : -120.0f; }
+
+std::filesystem::path dataPath(const wchar_t* name);
+
+void writeStatusIfDue() {
+    const unsigned long long now = GetTickCount64();
+    unsigned long long last = g_lastStatus.load();
+    if (now - last < 125 || !g_lastStatus.compare_exchange_strong(last, now)) return;
+    const unsigned ch = std::min(g_inChannels.load(), 8u);
+    char b[512];
+    int len = std::snprintf(b, sizeof(b), "time=%llu\nstreams=%d\nchannels=%u\nin=", now, g_streams.load(), ch);
+    for (unsigned c = 0; c < ch; ++c) len += std::snprintf(b + len, sizeof(b) - len, "%s%.1f", c ? " " : "", toDb(g_inPeak[c].exchange(0.0f)));
+    len += std::snprintf(b + len, sizeof(b) - len, "\noutL=%.1f\noutR=%.1f\ndynMin=%.1f\ndynMax=%.1f\n", toDb(g_outL.exchange(0.0f)),
+                         toDb(g_outR.exchange(0.0f)), g_dynMin.exchange(0.0f), g_dynMax.exchange(0.0f));
+    const std::filesystem::path tmp = dataPath(L"apo_status.tmp"), dst = dataPath(L"apo_status.ini");
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, tmp.c_str(), L"wb") || !f) return;
+    fwrite(b, 1, static_cast<size_t>(len), f);
+    fclose(f);
+    MoveFileExW(tmp.c_str(), dst.c_str(), MOVEFILE_REPLACE_EXISTING);  // fails harmlessly while the app reads
+}
+
 std::filesystem::path moduleDir() {
     wchar_t p[MAX_PATH];
     GetModuleFileNameW(g_module, p, MAX_PATH);
     return std::filesystem::path(p).parent_path();
 }
 
-std::filesystem::path settingsPath() {
+std::filesystem::path dataPath(const wchar_t* name) {
     PWSTR pd = nullptr;
     std::filesystem::path p = L"C:\\ProgramData";
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &pd))) p = pd;
     CoTaskMemFree(pd);
-    return p / L"TacAudio" / L"apo.ini";
+    return p / L"TacAudio" / name;
 }
+
+std::filesystem::path settingsPath() { return dataPath(L"apo.ini"); }
 
 std::string describe(IAudioMediaType* t) {
     if (!t) return "(none)";
@@ -397,13 +440,17 @@ public:
             engine_.reset();
         }
         locked_ = true;
+        ++g_streams;
+        g_inChannels = std::max(g_inChannels.load(), inCh_);
         startLogger();
         return S_OK;
     }
     STDMETHODIMP UnlockForProcess() override {
         stopLogger();
         engine_.reset();
+        if (locked_) --g_streams;
         locked_ = false;
+        writeStatusIfDue();
         logLine("UnlockForProcess (%llu frames processed)", frames_.load());
         return S_OK;
     }
@@ -466,9 +513,8 @@ private:
         for (UINT32 i = 0; i < n; ++i)
             for (UINT32 c = 0; c < inCh_; ++c) pk[c] = std::max(pk[c], std::fabs(src[i * inCh_ + c]));
         for (UINT32 c = 0; c < inCh_; ++c) {
-            float cur = peak_[c].load(std::memory_order_relaxed);
-            while (pk[c] > cur && !peak_[c].compare_exchange_weak(cur, pk[c], std::memory_order_relaxed)) {
-            }
+            raiseAtomic(peak_[c], pk[c]);
+            raiseAtomic(g_inPeak[c], pk[c]);
         }
     }
 
@@ -479,11 +525,20 @@ private:
             using namespace std::chrono;
             auto next = steady_clock::now();
             while (!logStop_) {
-                std::this_thread::sleep_for(milliseconds(100));
+                std::this_thread::sleep_for(milliseconds(50));
+                if (engine_) {  // feed the shared status the app reads
+                    float l, r, mn, mx;
+                    engine_->takeStats(l, r, mn, mx);
+                    raiseAtomic(g_outL, l);
+                    raiseAtomic(g_outR, r);
+                    lowerAtomic(g_dynMin, mn);
+                    raiseAtomic(g_dynMax, mx);
+                }
+                writeStatusIfDue();
                 if (steady_clock::now() < next) continue;
-                next += seconds(2);
+                next += seconds(10);
                 char b[256];
-                int len = std::snprintf(b, sizeof(b), "levels (dBFS) over 2 s, %llu frames:", frames_.load());
+                int len = std::snprintf(b, sizeof(b), "levels (dBFS) over 10 s, %llu frames:", frames_.load());
                 for (UINT32 c = 0; c < inCh_ && len < static_cast<int>(sizeof(b)) - 12; ++c) {
                     const float p = peak_[c].exchange(0.0f);
                     len += std::snprintf(b + len, sizeof(b) - len, " %.0f", p > 1e-6f ? 20.0f * std::log10(p) : -120.0f);

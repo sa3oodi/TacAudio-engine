@@ -44,6 +44,8 @@ $stage = Join-Path $root "dist\stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\hrtf\sadie2" | Out-Null
 Copy-Item "build\Release\TacAudio.exe", "build\Release\tacaudio-cli.exe", "build\Release\tacrender.exe" $stage
+# Direct mode: the engine add-on for Windows audio and its (elevated) installer tool.
+Copy-Item "build\Release\TacAudioApo.dll", "build\Release\tacapo-setup.exe" $stage
 Copy-Item "build\Release\hrtf\MIT_KEMAR_normal_pinna.sofa" "$stage\hrtf\"
 Copy-Item "$sadie\D1.sofa", "$sadie\D2.sofa", "$sadie\LICENSE.txt" "$stage\hrtf\sadie2\"
 Copy-Item "README.md" "$stage\README.md"

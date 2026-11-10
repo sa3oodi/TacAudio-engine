@@ -9,7 +9,8 @@
 //     another slot and are deleted here.
 //
 // Settings: %ProgramData%\TacAudio\apo.ini, same keys as the app's settings.ini (head, room,
-// punch, volume, 3d, dynOn, dynPreset, stepsOn, stepsLevel, bass). Re-read when it changes.
+// punch, volume, 3d, dynOn, dynPreset, stepsOn, stepsLevel, bass) plus "enabled". Re-read when it
+// changes.
 
 #include <atomic>
 #include <cstdint>
@@ -34,6 +35,7 @@ struct ApoSettings {
     float bassDb = 0.0f;
     float volumeDb = -6.0f;
     bool enabled3d = true;
+    bool enabled = true;              // TacAudio power: off = plain stereo downmix at unity gain
 
     bool needsRebuild(const ApoSettings& o) const {
         return head != o.head || room != o.room || dynamics != o.dynamics || punch != o.punch ||
@@ -54,6 +56,10 @@ public:
 
     // Real time. in: n interleaved frames of inChannels; out: n interleaved stereo frames.
     void process(const float* in, float* out, std::uint32_t n, std::uint32_t outChannels) noexcept;
+
+    // Since the last call (any thread): output peaks per ear (linear) and the strongest dynamics
+    // reduction / lift in dB.
+    void takeStats(float& peakL, float& peakR, float& dynMinDb, float& dynMaxDb) noexcept;
 
     static constexpr std::size_t kBlock = 128;  // 2.7 ms at 48 kHz (same as the app)
 
@@ -78,6 +84,8 @@ private:
     BinauralRenderer* next_ = nullptr;          // owned; warming up / fading in
     int swapStep_ = 0;
     float gain_ = 0.0f, mix3d_ = 1.0f;          // smoothed volume (linear) and 3D amount
+    float mixOn_ = 1.0f;                        // smoothed power (1 = TacAudio, 0 = plain downmix)
+    int statBlocks_ = 0;
     Limiter limiter_;
 
     // Hand-over slots between threads.
@@ -85,6 +93,8 @@ private:
     std::atomic<BinauralRenderer*> retired_{nullptr};  // audio -> worker (to delete)
     std::atomic<float> targetGain_{0.5f};
     std::atomic<bool> target3d_{true};
+    std::atomic<bool> targetOn_{true};
+    std::atomic<float> peakL_{0.0f}, peakR_{0.0f}, dynMin_{0.0f}, dynMax_{0.0f};
 
     std::thread thread_;
     std::atomic<bool> stop_{false};

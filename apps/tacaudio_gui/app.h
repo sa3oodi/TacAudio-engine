@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "apo_control.h"
 #include "cable_check.h"
 #include "session.h"
 
@@ -76,6 +77,8 @@ private:
     void pageSettings();
     void pageAbout();
     void pageSetup();
+    void setupDirect();   // Setup page, Direct mode cards
+    void setupCable();    // Setup page, VB-CABLE mode cards
     void finishSetup(bool turnOn);
 
     void startStop();
@@ -85,6 +88,11 @@ private:
     void refreshDevices();
     void setDeviceList(std::vector<wasapi::DeviceInfo> list);
     void pollSetupJobs();
+    // Direct mode (engine inside Windows audio, apps/apo).
+    std::string apoIniText() const;
+    void pollDirect();
+    void runApoSetup(const char* label, std::vector<std::wstring> args);
+    const wasapi::DeviceInfo* outputInfo() const;
     bool busy() const;
     template <typename F>
     void launch(const char* label, F fn);
@@ -117,6 +125,16 @@ private:
     std::optional<CableTestResult> testResult_;
     std::string testError_;
     std::vector<std::string> headNames_, headDescs_;
+
+    // Direct mode state.
+    bool direct_ = false;                 // engine attached to the chosen headphone output
+    bool apoSync_ = false;                // write apo.ini (set on a normal launch only)
+    int setupMode_ = 0;                   // Setup page: 0 = Direct, 1 = VB-CABLE
+    std::future<int> apoJob_;
+    std::string apoJobLabel_, apoMsg_;
+    std::string lastApoIni_;
+    std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
+    std::optional<apoctl::Status> apoStatus_;
 };
 
 }  // namespace tac

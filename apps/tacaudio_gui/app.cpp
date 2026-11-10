@@ -229,12 +229,26 @@ void App::setDeviceList(std::vector<wasapi::DeviceInfo> list) {
     };
     resolve(cfg_.dev.source);
     resolve(cfg_.dev.output);
+    if (!preview_) {
+        const auto* o = outputInfo();
+        direct_ = o && apoctl::attachedTo(o->id);
+    }
+}
+
+const wasapi::DeviceInfo* App::outputInfo() const {
+    for (const auto& d : devInfos_)
+        if (d.name == cfg_.dev.output) return &d;
+    return nullptr;
 }
 
 void App::startStop() {
     if (busy()) return;
     error_.clear();
     retries_ = 0;
+    if (direct_) {  // the engine lives in Windows audio: just tell it (apo.ini "enabled")
+        wantRunning_ = !wantRunning_;
+        return;
+    }
     if (wantRunning_ || session_.running()) {
         wantRunning_ = false;
         lastJobWasStart_ = false;
@@ -255,11 +269,18 @@ void App::autoStartIfEnabled() {
         page_ = kPageSetup;
         return;
     }
+    apoSync_ = true;  // only a normal launch controls the engine (not --smoke-test / --session-test)
+    if (direct_) {    // keep the engine's current state unless "Turn on at launch" is set
+        wantRunning_ = cfg_.autoEngine || apoctl::readSetting("enabled", "1") == "1";
+        return;
+    }
     if (cfg_.autoEngine && !wantRunning_) startStop();
 }
 
 std::string App::trayTooltip() const {
     if (!wantRunning_) return "TacAudio - off";
+    if (direct_) return std::string("TacAudio - ") + (status_.engine.running ? "playing" : "waiting for game") + ", 3D " +
+                        (cfg_.sound.enabled3d ? "on" : "off");
     if (!status_.running) return retries_ > 0 ? "TacAudio - reconnecting..." : "TacAudio - starting...";
     char b[96];
     std::snprintf(b, sizeof(b), "TacAudio - %s, 3D %s, ~%.0f ms", status_.engine.running ? "playing" : "waiting for game",
@@ -271,6 +292,10 @@ std::string App::trayTooltip() const {
 // a device disappears (GoXLR reset, cable removed, ...), retrying every few seconds.
 void App::supervise() {
     if (preview_ || busy()) return;
+    if (direct_) {  // no capture session in Direct mode (it would also block the headphones)
+        if (session_.running()) launch("Stopping", [this] { session_.stop(); });
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     if (wantRunning_ && session_.running() && !status_.error.empty()) {
         lastJobWasStart_ = false;
@@ -305,6 +330,7 @@ void App::pollBackground() {
         lastJobWasStart_ = false;
     }
     pollSetupJobs();
+    pollDirect();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
         wantRebuild_ = false;
@@ -312,7 +338,7 @@ void App::pollBackground() {
         launch("Applying", [this, s] { session_.apply(s); });
     }
     const auto now = std::chrono::steady_clock::now();
-    if (!preview_ && now - lastStatus_ > std::chrono::milliseconds(500)) {
+    if (!preview_ && !direct_ && now - lastStatus_ > std::chrono::milliseconds(500)) {
         status_ = session_.status();
         if (!status_.error.empty()) error_ = status_.error;
         lastStatus_ = now;
@@ -326,7 +352,14 @@ void App::pollBackground() {
     // Meters: fast attack, 30 dB/s fall, 1.2 s peak hold (only while the window is drawn).
     if (!preview_ && ImGui::GetCurrentContext() && ImGui::GetFrameCount() > 0 && ImGui::GetIO().DeltaTime < 0.5f) {
         float l = 0, r = 0;
-        session_.meters(l, r);
+        if (direct_) {  // ~8 status updates per second from the engine
+            if (apoStatus_ && wantRunning_) {
+                l = std::pow(10.0f, apoStatus_->outLDb / 20.0f);
+                r = std::pow(10.0f, apoStatus_->outRDb / 20.0f);
+            }
+        } else {
+            session_.meters(l, r);
+        }
         const float dt = ImGui::GetIO().DeltaTime, t = static_cast<float>(ImGui::GetTime());
         auto upd = [&](float lin, float& level, float& peak, double& hold) {
             const float db = toDb(lin);
@@ -352,6 +385,68 @@ void App::pollBackground() {
         saved_ = cfg_;
         lastSave_ = now;
     }
+}
+
+// ------------------------------------------------------------------ Direct mode
+std::string App::apoIniText() const {
+    char b[512];
+    std::snprintf(b, sizeof(b),
+                  "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
+                  "stepsLevel=%g\nbass=%g\n",
+                  wantRunning_ ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch, cfg_.sound.volumeDb,
+                  cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(), cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel,
+                  cfg_.sound.bassDb);
+    return b;
+}
+
+// Direct mode: push settings to the engine when they change, and read its status (~8 Hz).
+void App::pollDirect() {
+    if (apoJob_.valid() && apoJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        const int code = apoJob_.get();
+        apoMsg_ = code == 0 ? std::string() : code < 0 ? "Cancelled - administrator permission is needed."
+                                                       : "Something went wrong - details in %TEMP%\\tacapo_setup.txt";
+        refreshDevices();
+        lastApoIni_.clear();  // re-send the settings to a fresh install
+        if (code == 0 && direct_ && apoJobLabel_ == "Installing") wantRunning_ = true;
+    }
+    if (preview_ || !direct_) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastApoPoll_ < std::chrono::milliseconds(100)) return;
+    lastApoPoll_ = now;
+    const std::string ini = apoIniText();
+    if (apoSync_ && ini != lastApoIni_ && apoctl::writeSettings(ini)) lastApoIni_ = ini;
+
+    apoStatus_ = apoctl::readStatus();
+    status_ = {};
+    status_.running = wantRunning_;
+    status_.latencyMs = 4.0;  // one 128-frame block + limiter look-ahead
+    if (apoStatus_) {
+        const auto& in = apoStatus_->inDb;
+        bool any = false, surround = false;
+        for (unsigned c = 0; c < apoStatus_->channels && c < 8; ++c) {
+            any |= in[c] > -80.0f;
+            if (c >= 2) surround |= in[c] > -80.0f;
+        }
+        if (any) audioSeen_ = now;
+        if (surround && apoStatus_->channels == 8) surroundSeen_ = now;
+        status_.engine.dynMinGainDb = apoStatus_->dynMinDb;
+        status_.engine.dynMaxGainDb = apoStatus_->dynMaxDb;
+    }
+    status_.engine.running = wantRunning_ && now - audioSeen_ < std::chrono::seconds(2);
+    status_.source = now - surroundSeen_ < std::chrono::seconds(15) ? "Game audio: 7.1 surround" : "Game audio: stereo";
+    status_.output = cfg_.dev.output + " (Direct mode)";
+}
+
+void App::runApoSetup(const char* label, std::vector<std::wstring> args) {
+    if (apoJob_.valid()) return;
+    apoMsg_.clear();
+    apoJobLabel_ = label;
+    if (session_.running() || wantRunning_) {  // the cable session must not hold the headphones
+        wantRunning_ = false;
+        session_.stop();
+    }
+    const auto log = std::filesystem::temp_directory_path() / "tacapo_setup.txt";
+    apoJob_ = std::async(std::launch::async, [args, log] { return apoctl::runSetupElevated(args, log); });
 }
 
 // ------------------------------------------------------------------ frame / layout
@@ -451,8 +546,8 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
     text(subtitle, col::Dim, 13.5f);
 
     // Right side: status chip + power switch.
-    const bool running = session_.running() || preview_;
-    const bool working = busy();
+    const bool running = (direct_ ? wantRunning_ : session_.running()) || preview_;
+    const bool working = busy() && !direct_;
     const float powerW = S(150);
     ImGui::SetCursorScreenPos(ImVec2(start.x + avail - powerW, start.y + S(6)));
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -476,8 +571,12 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
     } else if (!running) {
         std::snprintf(chipText, sizeof(chipText), "Off");
     } else if (!status_.engine.running) {
-        std::snprintf(chipText, sizeof(chipText), "Waiting for game audio");
+        std::snprintf(chipText, sizeof(chipText), direct_ ? "Direct  -  waiting for game audio" : "Waiting for game audio");
         dot = col::Yellow;
+    } else if (direct_) {
+        const bool surround = status_.source.find("7.1") != std::string::npos;
+        std::snprintf(chipText, sizeof(chipText), "Direct  -  playing %s", surround ? "7.1" : "stereo");
+        dot = col::Green;
     } else {
         std::snprintf(chipText, sizeof(chipText), "Playing  ~%.0f ms", status_.latencyMs);
         dot = col::Green;
@@ -630,6 +729,24 @@ void App::pageSound() {
 // ------------------------------------------------------------------ Devices page
 void App::pageDevices() {
     topBar("Devices", "Where game audio comes from, and where TacAudio plays it.");
+    if (direct_) {
+        beginCard("##direct", "Direct mode", nullptr, 0,
+                  "TacAudio's engine runs inside Windows audio on your headphones - no virtual cable, ~4 ms delay.");
+        char b[256];
+        std::snprintf(b, sizeof(b), "Engine installed on: %s", cfg_.dev.output.c_str());
+        chip(b, col::Green);
+        ui::text("Games: set their output to this device (or leave it as the Windows default) and choose "
+                 "7.1 / Surround / Home theater in the game.",
+                 col::Dim, 13.0f);
+        ui::text(status_.source.c_str(), status_.source.find("7.1") != std::string::npos ? col::Teal : col::Faint, 13.0f, true);
+        endCard();
+        ImGui::Dummy(ImVec2(0, S(6)));
+        if (pillButton("Setup assistant", col::Card, col::Text, S(170))) {
+            setupMode_ = 0;
+            page_ = kPageSetup;
+        }
+        return;
+    }
     const bool locked = wantRunning_ || session_.running() || busy();
     if (locked) {
         ui::text("Turn TacAudio off to change devices.", col::Yellow, 13.5f, true);
@@ -688,6 +805,32 @@ void App::pagePerformance() {
         statTile(label, on ? value : "--", sub, on ? accent : col::Faint, ts);
         if (!last) ImGui::SameLine(0, gap);
     };
+    if (direct_) {
+        const bool surround = status_.source.find("7.1") != std::string::npos;
+        tile("Added latency", "~4 ms", "inside Windows audio, no cable", col::Teal, false);
+        tile("Game audio", status_.engine.running ? (surround ? "7.1" : "stereo") : "idle",
+             surround ? "surround channels are arriving" : "set the game to 7.1 / Home theater", col::Accent, false);
+        std::snprintf(v, sizeof(v), "%d", apoStatus_ ? apoStatus_->streams : 0);
+        tile("Streams", v, "game / app streams processed", col::Green, true);
+        ImGui::Dummy(ImVec2(0, gap - S(10)));
+        std::snprintf(v, sizeof(v), "%.1f dB", e.dynMinGainDb);
+        tile("Loud sounds tamed", v, "strongest reduction, last 0.1 s", col::Accent, false);
+        std::snprintf(v, sizeof(v), "%+.1f dB", e.dynMaxGainDb);
+        tile("Quiet sounds lifted", v, "strongest lift, last 0.1 s", col::Teal, false);
+        tile("Mode", "Direct", "TacAudio engine in Windows audio", col::Green, true);
+        ImGui::Dummy(ImVec2(0, gap - S(10)));
+        beginCard("##chan", "Game channels (input level)", nullptr, 0,
+                  "What the game sends, per speaker. Back and side speakers moving = the game outputs 7.1.");
+        const char* names[] = {"FL", "FR", "FC", "SW", "BL", "BR", "SL", "SR"};  // SW = subwoofer (LFE)
+        const float mw = (ImGui::GetContentRegionAvail().x - S(20)) * 0.5f;
+        for (int c = 0; c < 8; ++c) {
+            const float db = apoStatus_ && on ? apoStatus_->inDb[static_cast<std::size_t>(c)] : -120.0f;
+            meter(names[c], std::max(db, -60.0f), std::max(db, -60.0f), mw);
+            if (c % 2 == 0) ImGui::SameLine(0, S(20));
+        }
+        endCard();
+        return;
+    }
     std::snprintf(v, sizeof(v), "%.0f ms", status_.latencyMs);
     tile("Added latency", v, "capture + buffer + processing + output", col::Teal, false);
     std::snprintf(v, sizeof(v), "%.1f ms", e.bufferMs);
@@ -845,7 +988,7 @@ void App::pollSetupJobs() {
 }
 
 void App::finishSetup(bool turnOn) {
-    if (const auto cable = findCable(devInfos_)) cfg_.dev.source = cable->name;
+    if (const auto cable = findCable(devInfos_); cable && !direct_) cfg_.dev.source = cable->name;
     cfg_.setupDone = true;
     saveSettings(cfg_);
     saved_ = cfg_;
@@ -855,6 +998,106 @@ void App::finishSetup(bool turnOn) {
 
 void App::pageSetup() {
     topBar("Setup assistant", "Get your game's 7.1 sound into TacAudio. Steps tick off by themselves as you go.");
+    static const std::vector<std::string> kModes = {"Direct (recommended)", "VB-CABLE"};
+    segmentedRow("Mode", &setupMode_, kModes, 0,
+                 "Direct: TacAudio runs inside Windows audio on your headphones - no cable, lowest delay. "
+                 "VB-CABLE: the game plays into a virtual cable and TacAudio picks it up (works everywhere).");
+    ImGui::Dummy(ImVec2(0, S(2)));
+    if (setupMode_ == 0) setupDirect();
+    else setupCable();
+}
+
+namespace {
+std::wstring widen(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+}  // namespace
+
+void App::setupDirect() {
+    const bool working = apoJob_.valid();
+    const auto now = std::chrono::steady_clock::now();
+    char buf[256];
+
+    // --- 1. Headphones
+    beginCard("##d1", "1  Choose your headphones", nullptr, 0, "Where you listen. TacAudio's engine is added to this device.");
+    std::vector<std::string> phones;
+    std::string suggested;
+    for (const auto& d : devInfos_) {
+        if (d.name.find("CABLE") != std::string::npos) continue;
+        phones.push_back(d.name);
+        if (d.isDefault) suggested = d.name;
+    }
+    if (std::find(phones.begin(), phones.end(), cfg_.dev.output) == phones.end() && !suggested.empty()) cfg_.dev.output = suggested;
+    ImGui::BeginDisabled(working);
+    if (comboRow("Headphones", &cfg_.dev.output, phones, nullptr, std::string()) && !preview_) {
+        const auto* o = outputInfo();
+        direct_ = o && apoctl::attachedTo(o->id);
+    }
+    ImGui::EndDisabled();
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    // --- 2. Install the engine
+    beginCard("##d2", "2  Install the TacAudio engine", nullptr, 0,
+              "Adds TacAudio to Windows' own audio processing for these headphones. No virtual cable, ~4 ms delay.");
+    if (working) {
+        spinner(S(9), col::Accent);
+        ImGui::SameLine(0, S(10));
+        std::snprintf(buf, sizeof(buf), "%s... (approve the Windows permission prompt; sound pauses for a few seconds)",
+                      apoJobLabel_.c_str());
+        ui::text(buf, col::Dim, 13.5f);
+    } else if (direct_) {
+        std::snprintf(buf, sizeof(buf), "Installed on %s", cfg_.dev.output.c_str());
+        stepStatus(Step::Done, buf);
+        if (actionButton("Reinstall", false)) runApoSetup("Installing", {L"install", L"--device", widen(cfg_.dev.output)});
+        ImGui::SameLine(0, S(10));
+        if (actionButton("Remove engine", false)) runApoSetup("Removing", {L"uninstall"});
+    } else {
+        stepStatus(Step::Todo, apoctl::dllInstalled() ? "Installed on a different device" : "Not installed yet");
+        para("Windows asks for administrator permission once. Your sound pauses for a few seconds while Windows audio "
+             "restarts. You can remove it again at any time.");
+        if (actionButton("Install engine", true, !cfg_.dev.output.empty() && !preview_))
+            runApoSetup("Installing", {L"install", L"--device", widen(cfg_.dev.output)});
+    }
+    if (!apoMsg_.empty()) para(apoMsg_.c_str(), col::Red, 12.5f);
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    // --- 3. Game settings
+    beginCard("##d3", "3  Set up your game", nullptr, 0);
+    para("1.  Set the game's audio output to your headphones (Windows Settings > System > Sound > Volume mixer), "
+         "or leave it on the Windows default if your headphones are the default.\n"
+         "2.  In the game's audio settings choose 7.1 / Surround / Home theater, and turn off the game's own "
+         "3D-headphone mode.");
+    if (actionButton("Open Volume mixer", false)) openShell(L"ms-settings:apps-volume");
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    // --- 4. Live check
+    beginCard("##d4", "4  Check", nullptr, 0, "Updates live while your game plays.");
+    const bool surround = preview_ || now - surroundSeen_ < std::chrono::seconds(15);
+    const bool audio = preview_ || now - audioSeen_ < std::chrono::seconds(5);
+    if (!direct_ && !preview_) stepStatus(Step::Locked, "Waiting for step 2");
+    else if (surround) stepStatus(Step::Done, "Your game is sending 7.1 - TacAudio is placing it in 3D");
+    else if (audio) stepStatus(Step::Warn, "Game audio is stereo - choose 7.1 / Home theater in the game");
+    else stepStatus(Step::Locked, "Start your game - this updates by itself");
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(10)));
+
+    const bool ready = (direct_ || preview_) && !working;
+    if (actionButton("Finish and turn on", true, ready, S(200)) && !preview_) finishSetup(true);
+    ImGui::SameLine(0, S(10));
+    if (actionButton(cfg_.setupDone ? "Close" : "Skip for now", false, true, S(140)) && !preview_) finishSetup(false);
+    ImGui::SameLine(0, S(14));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
+    ui::text("A game that doesn't work in Direct mode? Use the VB-CABLE mode.", col::Faint, 12.5f);
+}
+
+void App::setupCable() {
     const auto cable = findCable(devInfos_);
     const bool has71 = cable && isSevenOne(*cable);
     const bool testing = testJob_.valid();
