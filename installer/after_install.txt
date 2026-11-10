@@ -1,28 +1,25 @@
-TacAudio is installed. One-time setup for games (about 3 minutes).
-TacAudio's Setup assistant opens on first launch and checks each step for you;
-here is the same list for reference:
+TacAudio is installed. One-time setup (about 1 minute) - the Setup assistant
+opens on first launch and walks you through it:
 
-1. Install VB-CABLE (free) from https://vb-audio.com/Cable/
-   Extract the zip, right-click VBCABLE_Setup_x64.exe > Run as administrator > Install,
-   then restart Windows.
+1. Choose your headphones.
 
-2. Set the cable to 7.1:
-   Press Win+R, type mmsys.cpl, Enter.
-   Playback tab > "CABLE Input" > Configure > 7.1 Surround > Next > Finish.
-   Then CABLE Input > Properties > Advanced > choose a 48000 Hz format > OK.
+2. Click "Install engine". Windows asks for administrator permission once,
+   and your sound pauses for a few seconds while Windows audio restarts.
+   TacAudio's engine now runs inside Windows audio on your headphones -
+   no virtual cable needed.
 
-3. Send your game to the cable:
-   Settings > System > Sound > Volume mixer > your game > Output device: CABLE Input.
-   (Keep Discord, browser etc. on your normal headphones.)
+3. Set up your game:
+   - Audio output: your headphones (or the Windows default).
+   - In the game's audio settings choose 7.1 / Surround / Home theater,
+     and turn off the game's own 3D-headphone mode.
 
-4. In the game's audio settings choose 7.1 / Surround / Home theater output,
-   and turn off the game's own 3D-headphone mode.
-
-5. Open TacAudio:
-   Devices page: "Game audio source" = CABLE Input, "Headphone output" = your headphones.
-   Then switch TacAudio ON (top right).
+4. Start the game. The Setup assistant shows "Your game is sending 7.1"
+   when everything works.
 
 Hotkeys: Ctrl+Alt+F10 turns TacAudio on/off, Ctrl+Alt+F9 switches 3D on/off.
-Closing the window keeps TacAudio running in the tray; right-click the tray icon to exit.
+Closing the window keeps TacAudio in the tray; right-click the tray icon to exit.
+
+Optional: if Direct mode can't be used on your PC, the Setup assistant's
+VB-CABLE tab guides you through the older virtual-cable setup.
 
 Help and updates: https://github.com/sa3oodi/TacAudio-engine

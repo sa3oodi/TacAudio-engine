@@ -59,8 +59,6 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
     ValueData: """{app}\TacAudio.exe"" --minimized"; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
-Filename: "https://vb-audio.com/Cable/"; Description: "Open the VB-CABLE download page (free, required for games)"; \
-    Flags: postinstall shellexec skipifsilent unchecked
 Filename: "{app}\TacAudio.exe"; Description: "Launch TacAudio"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]

@@ -6,13 +6,13 @@
 
 <p align="center">
   <b>Spatial 3D audio for competitive gaming on Windows.</b><br>
-  Precise direction, clean footsteps, tamed gunfire &mdash; on any headphones.
+  Precise direction, clean footsteps, tamed gunfire &mdash; on any headphones, no virtual cable.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0b84d8" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
-  <img src="https://img.shields.io/badge/version-0.5.0-ff7a1a" alt="version 0.5.0">
+  <img src="https://img.shields.io/badge/version-0.6.0-ff7a1a" alt="version 0.6.0">
   <img src="https://img.shields.io/badge/tests-336%20checks-2fe3c4" alt="336 test checks">
 </p>
 
@@ -36,66 +36,77 @@ commercial headphone virtualisers do &mdash; and then goes further for competiti
 - **No hidden bass boost**: the subwoofer channel is passed at the level the game mixed it, with an
   optional bass slider.
 
-Everything is adjustable live while you play, from a modern dark app with a tray icon and hotkeys.
+TacAudio's engine runs **inside Windows' own audio processing** on your headphones (*Direct mode*):
+the game simply plays to your headphones in 7.1, there is no virtual cable, and it adds about
+**4 ms** of delay. Everything is adjustable live while you play, from a modern dark app with a tray
+icon and hotkeys.
 
 ## Features
 
 | | |
 |---|---|
+| 🎯 **Direct mode** | Engine built into Windows audio on your headphones: no virtual cable, ~4 ms delay, keeps working with the app closed |
 | 🎧 **Measured heads** | SADIE II KEMAR and Neumann KU100 dummy heads included (+18 human heads optional), diffuse-field equalised so they sound neutral |
 | 🏠 **Room presets** | Neutral (dry, most precise), Balanced (small room), Spacious |
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB |
-| ⚡ **Low latency** | ~25 ms added in exclusive mode; glitch-free adaptive buffering with clock-drift compensation |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
-| 🧭 **Setup assistant** | Detects VB-CABLE and its 7.1 setting, opens the right Windows dialogs, tests all 8 channels, picks your headphones |
-| 🖥️ **Everyday app** | Tray icon, start with Windows, global hotkeys, automatic reconnect when a device resets, per-option reset buttons |
-| 📊 **Performance page** | Live latency, buffer, CPU, glitch counters and history |
+| 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
+| 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
+| 🖥️ **Everyday app** | Tray icon, start with Windows, global hotkeys, per-option reset buttons |
+| 🔌 **VB-CABLE mode** | Optional fallback for setups where Direct mode can't be used |
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.5.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
-2. Run it. It installs for your user only (no administrator rights) into
-   `%LOCALAPPDATA%\Programs\TacAudio`, with a Start menu entry and an uninstaller in
-   *Settings &rarr; Apps*.
+1. Download **`TacAudio-Setup-0.6.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+2. Run it. It installs for your user only into `%LOCALAPPDATA%\Programs\TacAudio`, with a Start
+   menu entry and an uninstaller in *Settings &rarr; Apps*.
 
 > The installer is not code-signed yet, so Windows SmartScreen may warn you.
 > Click **More info &rarr; Run anyway**.
 
-### One-time game setup
+### One-time setup (about 1 minute)
 
-Games have to output 7.1 into a device TacAudio can read. Until TacAudio ships its own virtual
-audio driver, this is the free **VB-CABLE**.
+TacAudio's **Setup assistant** opens on first launch (and any time from the *Setup* page):
 
-**TacAudio's Setup assistant does the checking for you.** It opens on first launch (and any time
-from the *Setup* page): it detects whether VB-CABLE is installed and set to 7.1, opens the right
-Windows dialogs, runs an inaudible 8-channel test and picks your headphones. Each step ticks off by
-itself as you complete it.
+1. **Choose your headphones.**
+2. **Install engine** &mdash; Windows asks for administrator permission once; sound pauses for a few
+   seconds while Windows audio restarts.
+3. **Set up your game**: audio output = your headphones (or the Windows default), and in the game's
+   audio settings choose **7.1 / Surround / Home theater**. Turn off the game's own 3D-headphone mode.
+4. **Check**: start the game &mdash; the assistant shows *"Your game is sending 7.1"* when the back
+   and side channels arrive.
 
 <p align="center">
   <img src="docs/images/screenshot-setup.png" width="720" alt="Setup assistant">
 </p>
 
-The same steps by hand:
+Tested with Call of Duty: Modern Warfare 4 on a GoXLR Mini: full 7.1 arrives, no anti-cheat issues.
 
-1. Install [VB-CABLE](https://vb-audio.com/Cable/) (run `VBCABLE_Setup_x64.exe` as administrator, then restart).
-2. `Win + R` &rarr; `mmsys.cpl` &rarr; *Playback* &rarr; **CABLE Input** &rarr; *Configure* &rarr; **7.1 Surround**;
-   *Properties &rarr; Advanced* &rarr; a **48000 Hz** format.
-3. *Settings &rarr; System &rarr; Sound &rarr; Volume mixer* &rarr; your game &rarr; output **CABLE Input**.
-4. In the game: audio output **7.1 / Surround / Home theater**, and turn off the game's own 3D-headphone mode.
-5. In TacAudio's **Devices** page pick *CABLE Input* as source and your headphones as output, then
-   switch TacAudio **ON** (top right).
+**Good to know**
+- The engine processes everything played on that headphone device (Discord, browser...). Stereo
+  apps stay stereo and pass through the same sound settings.
+- Windows' *Audio enhancements* must be enabled for the device (the default).
+- Apps that use exclusive or "raw" audio mode bypass Windows' audio effects, and therefore TacAudio.
+- *Remove engine* in the Setup assistant (or uninstalling TacAudio) restores the device's original
+  Windows effects exactly.
 
-`tacaudio-cli cable-test` runs the same 8-channel test from the command line.
+### Optional: VB-CABLE mode
+
+If Direct mode can't be used, the Setup assistant's **VB-CABLE** tab walks you through the older
+path: the free [VB-CABLE](https://vb-audio.com/Cable/) virtual device set to 7.1, the game playing
+into *CABLE Input*, and TacAudio capturing it and playing to your headphones (~25 ms delay).
+It detects the cable and its 7.1 setting, opens the right Windows dialogs and runs an inaudible
+8-channel test (`tacaudio-cli cable-test` does the same from the command line).
 
 ## Using TacAudio
 
 | Page | What it's for |
 |---|---|
 | **Sound** | Head, room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
-| **Devices** | Game audio source, headphone output, exclusive mode (lowest latency) |
-| **Setup** | Setup assistant: VB-CABLE, 7.1, channel test, headphones, game routing |
-| **Performance** | Latency, buffer, CPU, glitches, how much loud sound is tamed / quiet sound lifted |
+| **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode) |
+| **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
+| **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
 | **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys |
 
 | Hotkey | Action |
@@ -103,11 +114,12 @@ The same steps by hand:
 | `Ctrl + Alt + F10` | TacAudio on / off |
 | `Ctrl + Alt + F9` | 3D sound on / off (A/B) |
 
-Closing the window keeps TacAudio running in the tray; right-click the tray icon to exit.
+Closing the window keeps TacAudio running in the tray; right-click the tray icon to exit. In Direct
+mode the engine keeps your last settings even when the app is closed.
 
 <p align="center">
-  <img src="docs/images/screenshot-devices.png" width="420" alt="Devices page">
   <img src="docs/images/screenshot-performance.png" width="420" alt="Performance page">
+  <img src="docs/images/screenshot-devices.png" width="420" alt="Devices page">
 </p>
 <p align="center">
   <img src="docs/images/screenshot-settings.png" width="420" alt="Settings page">
@@ -118,43 +130,54 @@ Closing the window keeps TacAudio running in the tray; right-click the tray icon
 
 ```mermaid
 flowchart LR
-    G[Game<br>7.1 output] --> C[VB-CABLE<br>CABLE Input]
-    C -->|WASAPI loopback| R[Lock-free ring<br>+ drift compensation]
-    subgraph TacAudio engine
-      R --> D[Combat dynamics<br>+ footstep clarity<br>per channel]
-      D --> H[HRTF convolution<br>7 virtual speakers]
+    G[Game<br>7.1 output] --> W[Windows audio engine<br>audiodg.exe]
+    subgraph W2 [TacAudio APO inside Windows audio]
+      D[Combat dynamics<br>+ footstep clarity<br>per channel] --> H[HRTF convolution<br>7 virtual speakers]
       D --> M[Room<br>early reflections + FDN]
       H --> S((+))
       M --> S
       S --> V[Volume, 3D A/B]
       V --> L[Peak limiter]
     end
-    L -->|WASAPI exclusive| O[Headphones]
+    W -->|7.1, 8 channels| D
+    L -->|stereo| O[Headphones]
+    A[TacAudio app] -.->|settings| W2
+    W2 -.->|levels, status| A
 ```
 
-1. **Capture**: the game's 8 channels are read from the virtual cable (WASAPI loopback) into a
-   lock-free ring buffer. A slowly adapting resampler absorbs the clock difference between the
-   cable and your headphones; the buffer grows a little after a glitch and shrinks back when stable.
-2. **Dynamics**: each channel is compressed above a threshold and lifted below another, using a
+**Direct mode.** Windows lets audio-effect add-ons (*Audio Processing Objects*, the same mechanism
+behind "Audio enhancements" and laptop virtual-surround features) process a playback device.
+TacAudio installs one on your headphones. It asks Windows for a **7.1 input while the device stays
+stereo**, so a game set to 7.1 delivers all 8 channels to TacAudio, which renders them to 3D stereo
+right before the headphones. The app writes the settings to `%ProgramData%\TacAudio\apo.ini` (applied
+within 0.1 s) and reads the engine's live status back.
+
+The engine:
+
+1. **Dynamics**: each channel is compressed above a threshold and lifted below another, using a
    blend of peak and ~30 ms loudness detection (punch). Footstep clarity adds a 3.5 kHz band only
    while the channel is quiet.
-3. **Spatialisation**: every channel is a virtual speaker at its 7.1 position, convolved with the
+2. **Spatialisation**: every channel is a virtual speaker at its 7.1 position, convolved with the
    chosen head's HRTF pair (uniformly partitioned FFT convolution). The direction-averaged response
    of each head is equalised flat, so the head's own ear resonance does not colour the sound.
-4. **Room**: a stereo send feeds early reflections and a 4-line feedback delay network with a
+3. **Room**: a stereo send feeds early reflections and a 4-line feedback delay network with a
    Hadamard matrix; bass and top end are kept out of it so footsteps stay clean.
-5. **Output**: volume, a look-ahead peak limiter and exclusive-mode output at the device's minimum
-   period (3 ms on a GoXLR).
+4. **Output**: volume, 3D on/off and a look-ahead peak limiter.
 
 Live changes (head, room, dynamics...) swap the whole renderer without clicks: the new one runs
-silently for ~20 ms to fill its filters, then crossfades in over ~10 ms.
+silently for ~20 ms to fill its filters, then crossfades in over ~10 ms. The audio thread never
+allocates, locks or waits; renderers are built on a worker thread.
+
+**VB-CABLE mode** uses the same engine in the app: WASAPI loopback capture of the cable into a
+lock-free ring buffer with drift compensation and an adaptive buffer, then exclusive-mode output.
 
 ### Measured
 
 | | Result |
 |---|---|
-| Added latency, exclusive output | **~25 - 31 ms** (about 20 ms of it is the VB-CABLE step) |
-| Added latency, shared output | ~55 ms |
+| Added delay, Direct mode | **~4 ms** (one 2.7 ms processing block + 1 ms limiter look-ahead) |
+| Added latency, VB-CABLE mode | ~25 - 31 ms exclusive output, ~55 ms shared |
+| 7.1 through Direct mode | 8 channels arrive discrete (test levels -30 ... -51 dBFS intact) |
 | CPU | ~2 % of one core |
 | Gunfire vs. footsteps (battle test scene) | 31 dB &rarr; 21 dB (medium) &rarr; 16 dB (strong) |
 | Gunshot crack kept with punch 60 | 32 dB vs. 34 dB without dynamics (24 dB at punch 0) |
@@ -162,13 +185,15 @@ silently for ~20 ms to fill its filters, then crossfades in over ~10 ms.
 
 ## Build from source
 
-Requirements: Windows 10/11, Visual Studio 2022 or 2026 with the C++ workload, CMake 3.25+,
-Python 3 (only to download head data). The configure step downloads zlib, libmysofa and Dear ImGui.
+Requirements: Windows 10/11, Visual Studio 2022 or 2026 with the C++ workload and Windows SDK,
+CMake 3.25+, Python 3 (only to download head data). The configure step downloads zlib, libmysofa
+and Dear ImGui.
 
 ```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64     # or "Visual Studio 18 2026"
+cmake -S . -B build -A x64
 cmake --build build --config Release
 build\Release\tac_tests.exe                               # unit tests
+build\Release\tacapo-setup.exe selftest                   # drives the APO in-process
 python tools\fetch_sadie.py                               # SADIE II KU100 + KEMAR (--all: + 18 human heads)
 build\Release\TacAudio.exe
 ```
@@ -181,32 +206,33 @@ powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1
 ```
 
 The GitHub Actions workflow (`.github/workflows/build.yml`) builds, tests and packages the
-installer on every push.
+installer on every push, and publishes a GitHub Release for every `v*` tag.
 
 ### Command-line tools
 
 ```powershell
+tacapo-setup status                       # where the engine is installed, live levels, log
+tacapo-setup install --device "Headphones"   # (administrator) install the engine on a device
+tacapo-setup uninstall                    # (administrator) remove it, restore the original effects
+tacapo-setup play71 --device "Headphones"    # quiet 8-channel test tone (levels show in status)
 tacrender demo renders                    # synthetic 7.1 test scenes -> binaural WAVs
 tacrender render in_71.wav out.wav        # any 5.1 / 7.1 / 7.1.4 WAV -> binaural
 tacrender heads                           # list head sets;  tacrender audition <dir>: one render per head
 tacaudio-cli devices                      # audio devices with periods
-tacaudio-cli run --loopback "CABLE Input" --out "Game" --exclusive
-tacaudio-cli run ... --latency-test --gain-db -40   # measure added latency stage by stage
+tacaudio-cli run --loopback "CABLE Input" --out "Game" --exclusive    # VB-CABLE mode engine
 tacaudio-cli cable-test                   # verify a virtual cable carries 7.1
 ```
-
-Shared options: `--head`, `--room`, `--dynamics`, `--punch`, `--footsteps`, `--lfe-db`,
-`--gain-db`, `--raw-hrtf`, `--spherical`, `--block`.
 
 ## Project layout
 
 ```
 src/core/          DSP, no dependencies: FFT, partitioned convolver, HRTF sets + diffuse-field EQ,
                    VBAP, binaural renderer, room, dynamics, limiter, ring buffer, varispeed, WAV
-src/engine/        real-time engine (drift compensation, adaptive buffer, live renderer swap)
+src/engine/        real-time engine for VB-CABLE mode (drift compensation, adaptive buffer)
 src/platform/      WASAPI capture / loopback / render (shared, low-latency, exclusive)
 src/sofa/          SOFA HRTF import (libmysofa)
-apps/common/       shared CLI helpers, AudioSession (capture -> engine -> render)
+apps/apo/          TacAudioApo.dll (the Direct-mode engine inside Windows audio) + tacapo-setup.exe
+apps/common/       CLI helpers, AudioSession, cable check, apo_control (app <-> engine)
 apps/tacaudio_gui/ TacAudio.exe: Win32 + Direct3D 11 + Dear ImGui app (ui_widgets = UI kit)
 apps/tacaudio/     tacaudio-cli.exe        apps/tacrender/  tacrender.exe
 tests/             unit tests (each DSP block against a reference; engine vs. offline; drift, jitter)
@@ -216,7 +242,6 @@ installer/         Inno Setup script        scripts/  build_installer.ps1
 
 ## Roadmap
 
-- TacAudio virtual 7.1 driver (replaces VB-CABLE, removes ~20 ms latency; needs Microsoft signing for anti-cheat)
 - Game profiles (per-game settings, auto-switch when a game starts)
 - Headphone correction EQ per model
 - Upmix for stereo-only games
