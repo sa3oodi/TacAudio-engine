@@ -3,8 +3,12 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ["v*"]          # a version tag (e.g. v0.4.0) also publishes a GitHub Release
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write         # needed to create the release on tag pushes
 
 jobs:
   windows:
@@ -29,3 +33,18 @@ jobs:
         with:
           name: TacAudio-Setup
           path: dist/TacAudio-Setup-*.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TacAudio ${{ github.ref_name }}
+          files: dist/TacAudio-Setup-*.exe
+          body: |
+            **Install:** download `TacAudio-Setup-*.exe` below and run it (per-user, no admin rights).
+            The installer is not code-signed yet: if SmartScreen warns, click *More info -> Run anyway*.
+
+            **Games need a one-time setup** with the free VB-CABLE (7.1) - see the
+            [README](https://github.com/sa3oodi/TacAudio-engine#one-time-game-setup).
+
+            Hotkeys: Ctrl+Alt+F10 on/off, Ctrl+Alt+F9 3D on/off.
