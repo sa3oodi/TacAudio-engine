@@ -9,3 +9,4 @@ __pycache__/
 
 # Private research notes (not published)
 DTS_TECH.md
+/dist/

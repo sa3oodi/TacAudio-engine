@@ -1,0 +1,26 @@
+TacAudio is installed. One-time setup for games (about 3 minutes):
+
+1. Install VB-CABLE (free) from https://vb-audio.com/Cable/
+   Extract the zip, right-click VBCABLE_Setup_x64.exe > Run as administrator > Install,
+   then restart Windows.
+
+2. Set the cable to 7.1:
+   Press Win+R, type mmsys.cpl, Enter.
+   Playback tab > "CABLE Input" > Configure > 7.1 Surround > Next > Finish.
+   Then CABLE Input > Properties > Advanced > choose a 48000 Hz format > OK.
+
+3. Send your game to the cable:
+   Settings > System > Sound > Volume mixer > your game > Output device: CABLE Input.
+   (Keep Discord, browser etc. on your normal headphones.)
+
+4. In the game's audio settings choose 7.1 / Surround / Home theater output,
+   and turn off the game's own 3D-headphone mode.
+
+5. Open TacAudio:
+   Devices page: "Game audio source" = CABLE Input, "Headphone output" = your headphones.
+   Then switch TacAudio ON (top right).
+
+Hotkeys: Ctrl+Alt+F10 turns TacAudio on/off, Ctrl+Alt+F9 switches 3D on/off.
+Closing the window keeps TacAudio running in the tray; right-click the tray icon to exit.
+
+Help and updates: https://github.com/sa3oodi/TacAudio-engine

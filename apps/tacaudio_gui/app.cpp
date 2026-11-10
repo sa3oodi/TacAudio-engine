@@ -422,8 +422,8 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
     dl->AddText(fonts.semibold, S(14.5f), pp + ImVec2(S(42), S(11)), col::Text, running ? "ON" : "OFF");
     ImGui::SetCursorScreenPos(pp + ImVec2(ps.x - S(56), S(10)));
     bool on = wantRunning_ || preview_;
-    ImGui::BeginDisabled(working || preview_);
-    if (toggle("##power", &on)) startStop();
+    ImGui::BeginDisabled(working);
+    if (toggle("##power", &on) && !preview_) startStop();
     ImGui::EndDisabled();
 
     char chipText[96];
