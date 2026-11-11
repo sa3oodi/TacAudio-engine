@@ -93,7 +93,7 @@ private:
     float mixOn_ = 1.0f;                        // smoothed power (1 = TacAudio, 0 = plain downmix)
     int statBlocks_ = 0;
     Limiter limiter_;
-    std::vector<FootstepDetector> steps_;
+    FootstepTracker steps_;
     std::atomic<float> stepAct_[8] = {};
 
     // Hand-over slots between threads.

@@ -1007,15 +1007,21 @@ void testHeadphoneEq() {
 }
 
 void testFootstepDetector() {
-    // Footsteps at game level light it up; steady noise, gunfire, explosions and silence do not.
+    // Enemy footsteps light the ring towards them; everything else that is short and crunchy
+    // (reloads, single / automatic fire, own steps straight ahead) and loud or steady sounds do not.
     const double fs = 48000;
     Rng rng;
-    auto run = [&](const std::vector<float>& x, std::size_t settle) {  // max activity after `settle` samples
-        FootstepDetector d(fs);
-        d.process(x.data(), settle);
-        d.takeMax();
-        d.process(x.data() + settle, x.size() - settle);
-        return d.takeMax();
+    const SpeakerLayout lay = layoutFromChannelMask(0x63F);  // 7.1: FL FR FC LFE BL BR SL SR
+    std::vector<float> az;
+    std::vector<bool> lfe;
+    for (const auto& sp : lay.speakers) {
+        az.push_back(sp.azimuthDeg);
+        lfe.push_back(sp.isLfe);
+    }
+    auto ch = [&](const char* name) {
+        for (std::size_t c = 0; c < lay.size(); ++c)
+            if (lay.speakers[c].name == name) return c;
+        return std::size_t{0};
     };
     auto atDb = [](std::vector<float> v, double peakDb) {
         float pk = 0;
@@ -1024,46 +1030,117 @@ void testFootstepDetector() {
         for (auto& s : v) s *= g;
         return v;
     };
-    // Footsteps, peaking at -26 dBFS (a nearby enemy in a game mix), after 0.5 s of quiet ambience.
-    std::vector<float> steps = synthFootsteps(fs, 4, 0.42, 7);
-    std::vector<float> walk(24000 + steps.size());
-    for (std::size_t i = 0; i < walk.size(); ++i) walk[i] = 0.0005f * rng.next();
-    steps = atDb(steps, -26.0);
-    for (std::size_t i = 0; i < steps.size(); ++i) walk[24000 + i] += steps[i];
-    // Steady band noise (rain / wind) at a similar level.
-    std::vector<float> rain(96000);
+    // A scene: quiet ambience on every speaker plus `sound` on the given speakers (gain each).
+    // Returns the strongest activity on any speaker, and on `want`.
+    struct Out {
+        float any = 0, want = 0;
+        int steps = 0, impacts = 0;
+    };
+    auto run = [&](const std::vector<float>& sound, std::vector<std::pair<std::size_t, float>> on, std::size_t want) {
+        const std::size_t lead = 24000, n = lead + sound.size() + 24000;
+        std::vector<std::vector<float>> x(lay.size(), std::vector<float>(n));
+        for (auto& c : x)
+            for (auto& v : c) v = 0.0005f * rng.next();
+        for (auto [c, g] : on)
+            for (std::size_t i = 0; i < sound.size(); ++i) x[c][lead + i] += g * sound[i];
+        FootstepTracker t(fs, az, lfe);
+        std::vector<const float*> ptr;
+        for (auto& c : x) ptr.push_back(c.data());
+        Out o;
+        for (std::size_t off = 0; off < n; off += 480) {  // 10 ms blocks
+            std::vector<const float*> p = ptr;
+            for (auto& q : p) q += off;
+            t.process(p.data(), std::min<std::size_t>(480, n - off));
+            for (std::size_t c = 0; c < lay.size(); ++c) {
+                const float a = t.takeMax(c);
+                o.any = std::max(o.any, a);
+                if (c == want) o.want = std::max(o.want, a);
+            }
+        }
+        o.steps = t.steps();
+        o.impacts = t.impacts();
+        return o;
+    };
+    const std::size_t FL = ch("FL"), FR = ch("FR"), FC = ch("FC"), SL = ch("SL"), SR = ch("SR"), BL = ch("BL");
+
+    // Footsteps peaking at -26 dBFS (a nearby enemy in a game mix): walking and running.
+    const std::vector<float> walk = atDb(synthFootsteps(fs, 5, 0.42, 7), -26.0);
+    const std::vector<float> run4 = atDb(synthFootsteps(fs, 5, 0.3, 11), -26.0);
+    const Out oWalk = run(walk, {{SL, 1.0f}, {BL, 0.35f}}, SL);
+    const Out oRun = run(run4, {{FR, 0.7f}, {SR, 0.7f}}, SR);
+    // Short crunchy impacts that are not steps.
+    auto click = [&](double at, std::vector<float>& v) {  // metallic click: sharp tick + short ring
+        Biquad hp = Biquad::highpass(fs, 2500.0), bp = Biquad::bandpass(fs, 4200.0, 8.0);
+        const auto s0 = static_cast<std::size_t>(at * fs);
+        for (std::size_t i = 0; i < 1200 && s0 + i < v.size(); ++i) {
+            const double t = static_cast<double>(i) / fs;
+            const float x = rng.next();
+            v[s0 + i] += hp.process(x) * static_cast<float>(std::exp(-t / 0.003)) +
+                         bp.process(x) * static_cast<float>(3.0 * std::exp(-t / 0.015));
+        }
+    };
+    std::vector<float> reload(96000, 0.0f);  // mag out, mag in, slap, bolt: irregular
+    for (double t : {0.05, 0.4, 0.95, 1.15, 1.7}) click(t, reload);
+    reload = atDb(reload, -26.0);
+    std::vector<float> ownReload(96000, 0.0f);  // a regular one (worst case), but your own: straight ahead
+    for (double t : {0.05, 0.5, 0.95, 1.4}) click(t, ownReload);
+    ownReload = atDb(ownReload, -24.0);
+    auto shotAt = [&](double at, std::vector<float>& v) {  // crack + boom
+        Biquad hp = Biquad::highpass(fs, 900.0), lp = Biquad::lowpass(fs, 140.0);
+        const auto s0 = static_cast<std::size_t>(at * fs);
+        for (std::size_t i = 0; i < 9600 && s0 + i < v.size(); ++i) {
+            const double t = static_cast<double>(i) / fs;
+            const float x = rng.next();
+            v[s0 + i] += hp.process(x) * static_cast<float>(1.6 * std::exp(-t / 0.012)) +
+                         lp.process(x) * static_cast<float>(3.0 * std::exp(-t / 0.09));
+        }
+    };
+    std::vector<float> farShot(24000, 0.0f), autoFire(96000, 0.0f), loudShot(24000, 0.0f);
+    shotAt(0.01, farShot);
+    farShot = atDb(farShot, -26.0);
+    for (int k = 0; k < 13; ++k) shotAt(0.05 + 0.1 * k, autoFire);  // 600 rounds / minute, far away
+    autoFire = atDb(autoFire, -26.0);
+    shotAt(0.01, loudShot);
+    loudShot = atDb(loudShot, -1.0);
+    std::vector<float> rain(96000);  // steady band noise
     {
         Biquad bp = Biquad::bandpass(fs, 3500.0, 0.7);
         for (auto& s : rain) s = bp.process(rng.next());
         rain = atDb(rain, -26.0);
     }
-    // Gunshot: broadband crack + boom, loud.
-    std::vector<float> shot(48000, 0.0f);
-    {
-        Biquad hp = Biquad::highpass(fs, 900.0), lp = Biquad::lowpass(fs, 140.0);
-        for (std::size_t i = 24000; i < shot.size(); ++i) {
-            const double t = static_cast<double>(i - 24000) / fs;
-            const float x = rng.next();
-            shot[i] = hp.process(x) * static_cast<float>(1.6 * std::exp(-t / 0.012)) + lp.process(x) * static_cast<float>(3.0 * std::exp(-t / 0.09));
-        }
-        shot = atDb(shot, -1.0);
-    }
-    // Explosion rumble at a moderate level (far away): mostly low frequencies.
-    std::vector<float> boom(48000, 0.0f);
+    std::vector<float> boom(48000, 0.0f);  // distant explosion: mostly rumble
     {
         Biquad lp = Biquad::lowpass(fs, 180.0, 1.0);
-        for (std::size_t i = 24000; i < boom.size(); ++i)
-            boom[i] = lp.process(rng.next()) * static_cast<float>(std::exp(-static_cast<double>(i - 24000) / fs / 0.4));
+        for (std::size_t i = 0; i < boom.size(); ++i)
+            boom[i] = lp.process(rng.next()) * static_cast<float>(std::exp(-static_cast<double>(i) / fs / 0.4));
         boom = atDb(boom, -24.0);
     }
-    const float aWalk = run(walk, 0), aRain = run(rain, 48000), aShot = run(shot, 0), aBoom = run(boom, 0),
-                aQuiet = run(std::vector<float>(48000, 0.0f), 0);
-    std::printf("    footsteps %.2f | rain %.2f | gunshot %.2f | explosion %.2f | silence %.2f\n", aWalk, aRain, aShot, aBoom, aQuiet);
-    CHECK(aWalk > 0.6f);
-    CHECK(aRain < 0.15f);
-    CHECK(aShot < 0.15f);
-    CHECK(aBoom < 0.2f);
-    CHECK(aQuiet < 0.01f);
+    const Out oReload = run(reload, {{SR, 1.0f}}, SR), oOwnReload = run(ownReload, {{FL, 0.8f}, {FR, 0.8f}}, FL),
+              oOwnSteps = run(walk, {{FL, 0.7f}, {FR, 0.7f}, {FC, 0.5f}}, FC), oFarShot = run(farShot, {{SR, 1.0f}}, SR),
+              oAuto = run(autoFire, {{SR, 1.0f}}, SR), oLoud = run(loudShot, {{SR, 1.0f}}, SR),
+              oRain = run(rain, {{SR, 1.0f}}, SR), oBoom = run(boom, {{SL, 1.0f}}, SL),
+              oQuiet = run(std::vector<float>(48000, 0.0f), {}, SL);
+    std::printf("    walk %.2f (%d steps) | run %.2f (%d) | reload %.2f | own reload %.2f | own steps %.2f | far shot %.2f | "
+                "auto fire %.2f | loud shot %.2f | rain %.2f | explosion %.2f | silence %.2f\n",
+                oWalk.want, oWalk.steps, oRun.want, oRun.steps, oReload.any, oOwnReload.any, oOwnSteps.any, oFarShot.any,
+                oAuto.any, oLoud.any, oRain.any, oBoom.any, oQuiet.any);
+    std::printf("    impacts heard: reload %d, own reload %d, own steps %d, auto fire %d\n", oReload.impacts,
+                oOwnReload.impacts, oOwnSteps.impacts, oAuto.impacts);
+    CHECK(oReload.impacts >= 3);  // heard, and rejected for their rhythm / direction
+    CHECK(oOwnReload.impacts >= 3);
+    CHECK(oOwnSteps.impacts >= 3);
+    CHECK(oWalk.want > 0.6f);
+    CHECK(oWalk.steps >= 2);
+    CHECK(oRun.want > 0.6f);
+    CHECK(oReload.any < 0.05f);
+    CHECK(oOwnReload.any < 0.05f);
+    CHECK(oOwnSteps.any < 0.05f);
+    CHECK(oFarShot.any < 0.05f);
+    CHECK(oAuto.any < 0.05f);
+    CHECK(oLoud.any < 0.05f);
+    CHECK(oRain.any < 0.05f);
+    CHECK(oBoom.any < 0.05f);
+    CHECK(oQuiet.any < 0.01f);
 }
 
 void testSmartFootsteps() {
@@ -1178,7 +1255,7 @@ int main() {
         {"M3 dynamics: tame loud, lift quiet, independent channels", testDynamics},
         {"M3 footstep boost: quiet band only", testFootstepBoost},
         {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
-        {"footstep detector: steps yes; rain, gunfire, explosions no", testFootstepDetector},
+        {"footstep detector: enemy steps yes; reloads, fire, own sounds, rain, explosions no", testFootstepDetector},
         {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE

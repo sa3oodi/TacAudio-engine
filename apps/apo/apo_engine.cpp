@@ -96,7 +96,17 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     }
 
     inBlock_.assign(inCh_, std::vector<float>(kBlock, 0.0f));
-    steps_.assign(std::min<std::uint32_t>(inCh_, 8), FootstepDetector(sampleRate));
+    {
+        std::vector<float> az;
+        std::vector<bool> lfe;
+        for (const auto& s : layout_.speakers) {
+            az.push_back(s.azimuthDeg);
+            lfe.push_back(s.isLfe);
+        }
+        az.resize(std::min<std::size_t>(az.size(), inCh_));
+        lfe.resize(az.size());
+        steps_ = FootstepTracker(sampleRate, az, lfe);
+    }
     for (auto& b : inBlock_) inPtrs_.push_back(b.data());
     qL_.assign(2 * kBlock + 1, 0.0f);
     qR_.assign(2 * kBlock + 1, 0.0f);
@@ -186,9 +196,9 @@ void ApoEngine::takeFootsteps(float* out8) noexcept {
 
 void ApoEngine::renderBlock() noexcept {
     // Footstep detection on the game's channels (for the app's direction ring).
-    for (std::size_t c = 0; c < steps_.size(); ++c) {
-        steps_[c].process(inBlock_[c].data(), kBlock);
-        const float a = steps_[c].takeMax();
+    steps_.process(inPtrs_.data(), kBlock);
+    for (std::size_t c = 0; c < steps_.channels(); ++c) {
+        const float a = steps_.takeMax(c);
         float cur = stepAct_[c].load(std::memory_order_relaxed);
         while (a > cur && !stepAct_[c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
         }

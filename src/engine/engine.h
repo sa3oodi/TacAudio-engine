@@ -157,7 +157,7 @@ private:
     std::atomic<bool> runningFlag_{false};
     std::atomic<float> inPeak_[kMaxMeterChannels] = {};
     std::atomic<float> stepAct_[kMaxMeterChannels] = {};
-    std::vector<FootstepDetector> steps_;
+    FootstepTracker steps_;
 };
 
 }  // namespace tac

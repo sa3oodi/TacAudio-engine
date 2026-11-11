@@ -53,7 +53,7 @@ icon and hotkeys.
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB. *Smart* mode lifts only short impacts (steps, landings, reloads) and leaves steady sounds in the same band (rain, wind, engines) alone |
 | 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
 | 🎚️ **Headphone EQ** | Import a parametric correction for your headphone model (Equalizer APO / AutoEq format, file or paste); applied after 3D, in both modes |
-| ♿ **Footstep ring** | Accessibility option (off by default): a small click-through ring in any corner of the main screen (or the centre) glows towards enemy footsteps. A footstep detector on each 7.1 channel ignores gunfire, explosions, vehicles and rain. Check your game's / tournament's rules before using it competitively |
+| ♿ **Footstep ring** | Accessibility option (off by default): a small click-through ring in any corner of the main screen (or the centre) glows towards enemy footsteps. It lights only for a walking rhythm (3+ regular steps from one direction), so reloads, clicks, single or automatic fire, explosions, rain and your own sounds (straight ahead) are ignored. Check your game's / tournament's rules before using it competitively |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |

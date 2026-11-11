@@ -1206,8 +1206,9 @@ void App::pageSettings() {
     ImGui::Dummy(ImVec2(0, S(6)));
 
     beginCard("##access", "Accessibility", nullptr, 0,
-              "For players who can't hear well: shows where enemy footsteps come from. A footstep detector on each 7.1 "
-              "channel picks out short, crunchy, moderate impacts and ignores gunfire, explosions, vehicles and rain. "
+              "For players who can't hear well: shows where enemy footsteps come from. It lights only for a walking rhythm "
+              "(3+ steps from one direction), so reloads, clicks, gunfire, explosions and rain are ignored, and so are "
+              "your own sounds (straight ahead). "
               "It only reads the audio TacAudio already processes - nothing inside the game.");
     const ImVec2 cardTop = ImGui::GetCursorScreenPos();
     const float previewW = S(150);
@@ -1215,7 +1216,7 @@ void App::pageSettings() {
     ImGui::BeginGroup();
     ImGui::PushItemWidth(rowW);
     ImGui::BeginChild("##accrows", ImVec2(rowW, S(215)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps - gunfire and explosions are ignored.",
+    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps - reloads, gunfire and your own sounds are ignored.",
               def.overlayOn);
     ImGui::BeginDisabled(!cfg_.overlayOn);
     {
