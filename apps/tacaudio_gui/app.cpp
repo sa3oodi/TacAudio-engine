@@ -533,7 +533,7 @@ std::string App::apoIniText() const {
                   wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
                   cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
                   cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
-    return std::string(b) + "eq=" + cfg_.effective().eq + "\n";
+    return std::string(b) + "eq=" + cfg_.effective().eq + "\ncapture=" + std::to_string(std::max(0, captureId_)) + "\n";
 }
 
 // Direct mode: push settings to the engine when they change, and read its status (~8 Hz).
@@ -551,6 +551,13 @@ void App::pollDirect() {
     const auto now = std::chrono::steady_clock::now();
     if (now - lastApoPoll_ < std::chrono::milliseconds(100)) return;
     lastApoPoll_ = now;
+    if (captureId_ < 0) {  // keep the engine's last request (a new id = record now)
+        try {
+            captureId_ = std::stoi(apoctl::readSetting("capture", "0"));
+        } catch (const std::exception&) {
+            captureId_ = 0;
+        }
+    }
     const std::string ini = apoIniText();
     if (apoSync_ && ini != lastApoIni_ && apoctl::writeSettings(ini)) lastApoIni_ = ini;
 
@@ -1242,6 +1249,36 @@ void App::pageSettings() {
                       stepCount_[0], stepCount_[1], stepCount_[0] - stepCount_[1], stepCount_[3], stepCount_[4], shown);
         para(buf, col::Dim, 12.0f);
         if (ImGui::SmallButton("Reset counters")) stepCount_ = {};
+        // Recording for tuning: 15 s of the game's sound, analysed with "tacrender steps-report".
+        if (direct_ && !preview_) {
+            using namespace std::chrono;
+            const auto now = steady_clock::now();
+            const bool recording = captureId_ >= 0 && captureAt_ != steady_clock::time_point{} && now - captureAt_ < seconds(25) &&
+                                   captureFile_.empty();
+            ImGui::SameLine(0, S(12));
+            ImGui::BeginDisabled(recording || !wantRunning_);
+            if (ImGui::SmallButton("Record 15 s of game sound")) {
+                captureId_ = std::max(0, captureId_) + 1;
+                captureAt_ = now;
+                captureFile_.clear();
+            }
+            ImGui::EndDisabled();
+            if (captureAt_ != steady_clock::time_point{}) {
+                if (captureFile_.empty()) {  // newest capture_*.wav written after the click
+                    std::error_code ec;
+                    const auto since = std::filesystem::file_time_type::clock::now() - (now - captureAt_) - seconds(1);
+                    for (const auto& e : std::filesystem::directory_iterator(apoctl::dataDir(), ec)) {
+                        const std::string fn = e.path().filename().string();
+                        if (fn.rfind("capture_", 0) == 0 && e.path().extension() == ".wav" && e.last_write_time(ec) >= since)
+                            captureFile_ = e.path().string();
+                    }
+                }
+                const std::string msg = !captureFile_.empty() ? "Saved: " + captureFile_
+                                        : recording ? "Recording... keep playing - an enemy walking nearby is ideal."
+                                                    : "Nothing was recorded - is the game playing sound through TacAudio?";
+                para(msg.c_str(), captureFile_.empty() ? col::Dim : col::Accent, 12.0f);
+            }
+        }
     }
     para("Works over windowed and borderless-fullscreen games (not exclusive fullscreen). Some games and tournaments "
          "don't allow sound-visualisation overlays - check the rules before using it in ranked or competitive play.",

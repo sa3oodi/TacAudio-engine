@@ -63,6 +63,7 @@ ApoSettings readSettings(const std::filesystem::path& file) {
             else if (k == "stepsSmart") s.footstepsSmart = v == "1";
             else if (k == "eq") s.eq = v;
             else if (k == "enabled") s.enabled = v == "1";
+            else if (k == "capture") s.captureId = std::stoi(v);
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -123,6 +124,7 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     mix3d_ = s.enabled3d ? 1.0f : 0.0f;
     targetOn_ = s.enabled;
     mixOn_ = s.enabled ? 1.0f : 0.0f;
+    capId_ = s.captureId;  // only a new request records (not the one from before this stream opened)
     thread_ = std::thread([this] { worker(); });
 }
 
@@ -144,6 +146,7 @@ void ApoEngine::worker() {
     while (!stop_) {
         delete retired_.exchange(nullptr);
         std::this_thread::sleep_for(milliseconds(50));
+        if (capDone_.load(std::memory_order_acquire)) writeCapture();
         if (steady_clock::now() - lastCheck < milliseconds(100)) continue;
         lastCheck = steady_clock::now();
 
@@ -155,6 +158,21 @@ void ApoEngine::worker() {
         targetGain_ = dbToLin(s.volumeDb);
         target3d_ = s.enabled3d;
         targetOn_ = s.enabled;
+        if (s.captureId != capId_ && !capArmed_.load()) {
+            capId_ = s.captureId;
+            try {
+                capture_.sampleRate = static_cast<std::uint32_t>(rate_);
+                capture_.channelMask = defaultChannelMask(inCh_);
+                capture_.resize(inCh_, static_cast<std::size_t>(kCaptureSec * rate_));
+                capPos_ = 0;
+                capDone_.store(false);
+                capArmed_.store(true, std::memory_order_release);
+                apoLog("capture: recording %.0f s of the game's sound (%u channels, %s)", kCaptureSec, inCh_,
+                       layout_.describe().c_str());
+            } catch (const std::exception&) {
+                apoLog("capture: not enough memory");
+            }
+        }
         if (built && !s.needsRebuild(have)) {
             have = s;
             continue;
@@ -188,6 +206,28 @@ void ApoEngine::worker() {
             have = s;
         }
     }
+}
+
+void ApoEngine::writeCapture() {
+    // Only streams that carried sound are kept (a game may open a silent one too).
+    float pk = 0.0f;
+    for (const auto& ch : capture_.channels)
+        for (float v : ch) pk = std::max(pk, std::abs(v));
+    if (pk > 1e-4f) {
+        static std::atomic<int> n{0};
+        const int idx = ++n;
+        const std::filesystem::path out = settingsFile_.parent_path() / ("capture_" + std::to_string(idx) + ".wav");
+        try {
+            writeWav(out, capture_, WavSampleFormat::Pcm16);
+            apoLog("capture: wrote %s", out.string().c_str());
+        } catch (const std::exception& e) {
+            apoLog("capture: cannot write %s: %s", out.string().c_str(), e.what());
+        }
+    }
+    capture_.channels.clear();
+    capture_.channels.shrink_to_fit();
+    capArmed_.store(false);
+    capDone_.store(false);
 }
 
 void ApoEngine::takeFootsteps(float* out8, int level) noexcept {
@@ -336,6 +376,10 @@ void ApoEngine::process(const float* in, float* out, std::uint32_t n, std::uint3
         for (std::uint32_t i = 0; i < chunk; ++i) {
             const float* f = in + static_cast<std::size_t>(done + i) * inCh_;
             for (std::uint32_t c = 0; c < inCh_; ++c) inBlock_[c][inPos_] = f[c];
+            if (capArmed_.load(std::memory_order_acquire) && !capDone_.load(std::memory_order_relaxed)) {
+                for (std::uint32_t c = 0; c < inCh_; ++c) capture_.channels[c][capPos_] = f[c];
+                if (++capPos_ == capture_.numFrames()) capDone_.store(true, std::memory_order_release);
+            }
             if (++inPos_ == kBlock) {
                 renderBlock();
                 inPos_ = 0;

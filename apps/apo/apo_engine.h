@@ -22,6 +22,7 @@
 
 #include "core/binaural_renderer.h"
 #include "core/footstep_detector.h"
+#include "core/wav.h"
 #include "core/layout.h"
 #include "core/limiter.h"
 
@@ -39,6 +40,7 @@ struct ApoSettings {
     float volumeDb = -6.0f;
     bool enabled3d = true;
     bool enabled = true;              // TacAudio power: off = plain stereo downmix at unity gain
+    int captureId = 0;                // the app asks for a recording of the game sound by changing this
 
     bool needsRebuild(const ApoSettings& o) const {
         return head != o.head || room != o.room || dynamics != o.dynamics || punch != o.punch ||
@@ -108,6 +110,15 @@ private:
 
     std::thread thread_;
     std::atomic<bool> stop_{false};
+
+    // Recording of the game's sound (input) for tuning the footstep detector: the worker allocates
+    // the buffer, the audio thread fills it once, the worker writes capture_<n>.wav.
+    static constexpr double kCaptureSec = 15.0;
+    void writeCapture();
+    AudioBuffer capture_;
+    std::atomic<bool> capArmed_{false}, capDone_{false};
+    std::size_t capPos_ = 0;           // audio thread
+    int capId_ = 0;
 };
 
 }  // namespace tac::apo

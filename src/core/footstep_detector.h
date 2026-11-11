@@ -6,7 +6,7 @@
 // 1. FootstepDetector (per channel) finds footstep-like *impacts*: a short sound whose energy sits
 //    in the crunch band (~1.5-6 kHz), at a moderate level. It requires all of
 //      * an onset: the band's level (5 ms) jumps above its own background (300 ms)
-//      * not loud: your own gunfire, explosions and killstreaks peak far higher than steps
+//      * not near full scale: your own gunfire and explosions on top of you
 //      * not bass-heavy: crunch within ~15 dB of the low end (explosions / vehicles are rumble)
 //      * audible: above the noise floor
 //    Onsets are judged 16 ms later, once the whole sound is there.
@@ -52,12 +52,20 @@ public:
     float excessEnergy() const noexcept { return bandE_ > slow_ ? bandE_ - slow_ : 0.0f; }
     void reset() noexcept;
 
+    // The latest decision's measurements (for the steps-report tool).
+    struct Debug {
+        float jumpDb = 0, peakDb = -180, tiltDb = 0;  // onset size, channel peak, crunch vs rumble
+        float onset = 0, notLoud = 0, crunchy = 0, audible = 0;
+    };
+    const Debug& debug() const noexcept { return dbg_; }
+
 private:
     Biquad hp_, lp_, low_;          // crunch band = hp(1.5 kHz) + lp(6 kHz); rumble = lp(250 Hz)
     float fast_ = 0, slow_ = 0;     // band energy, 5 ms / 300 ms
     float bandE_ = 0, lowE_ = 0;    // band / rumble energy, 20 ms
     float peak_ = 0;                // full-band peak, 50 ms release
     float cand_ = 0;
+    Debug dbg_;
     float cFast_, cSlow_, c20_, cPeak_;
     int tick_ = 0;
     // An explosion's first milliseconds can look crunchy before its rumble builds up.
@@ -91,6 +99,16 @@ public:
     void reset() noexcept;
 
     const Stats& totals() const noexcept { return total_; }
+
+    // Offline analysis (steps-report): every impact and what became of it. Not real-time safe.
+    enum class Verdict { Own, Burst, First, Walk, Steady };
+    struct Event {
+        double timeSec = 0;
+        float azimuthDeg = 0, focus = 0, levelDb = 0;
+        Verdict verdict = Verdict::First;
+    };
+    void setLog(std::vector<Event>* log) noexcept { log_ = log; }
+    const FootstepDetector& detector(std::size_t c) const { return det_[c]; }
     Stats takeStats() noexcept {  // since the last call
         const Stats s = fresh_;
         fresh_ = {};
@@ -135,6 +153,7 @@ private:
     std::array<std::array<float, kMaxChannels>, kLevels> act_{}, max_{};
     float cRel_ = 0;
     Stats total_{}, fresh_{};
+    std::vector<Event>* log_ = nullptr;
 };
 
 }  // namespace tac

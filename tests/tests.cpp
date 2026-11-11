@@ -1159,13 +1159,14 @@ void testFootstepDetector() {
     for (int l = 0; l < 3; ++l) {
         CHECK(oOwnReload.any[l] < 0.05f);
         CHECK(oOwnSteps.any[l] < 0.05f);
-        CHECK(oLoud.any[l] < 0.05f);
         CHECK(oBoom.any[l] < 0.05f);
         CHECK(oQuiet.any[l] < 0.01f);
     }
     // Single shot: not at Balanced / Strict. Reloads and automatic fire: not at Strict.
     CHECK(oReload.st.impacts >= 3);
     CHECK(oFarShot.any[1] < 0.05f);
+    CHECK(oLoud.any[1] < 0.05f);  // a loud single shot from the side: Sensitive only
+    CHECK(oLoud.any[2] < 0.05f);
     CHECK(oRain.any[1] < 0.05f);  // the rain starting is one impact (Sensitive), then nothing
     CHECK(oRain.any[2] < 0.05f);
     CHECK(oFarShot.any[2] < 0.05f);

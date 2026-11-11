@@ -187,6 +187,10 @@ private:
     // Footstep counters while the ring is on: impacts, own, single, balanced, strict.
     std::array<long long, 5> stepCount_{}, stepSeen_{};
     bool stepSeenValid_ = false;
+    // Recording of the game sound for tuning (Direct mode): apo.ini capture=<id>.
+    int captureId_ = -1;  // -1 = not read from apo.ini yet
+    std::chrono::steady_clock::time_point captureAt_{};
+    std::string captureFile_;
     bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
 
     // Game profiles and the game library (Profiles page).

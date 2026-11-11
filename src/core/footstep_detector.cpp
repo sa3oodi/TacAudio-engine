@@ -65,7 +65,9 @@ bool FootstepDetector::process(const float* x, std::size_t n) noexcept {
         const float peakDb = 20.0f * std::log10(peak_ + 1e-9f);
         const float tiltDb = 10.0f * std::log10((bandE_ + 1e-14f) / (lowE_ + 1e-14f));
         const float onset = std::clamp((jumpDb - 3.0f) / 5.0f, 0.0f, 1.0f);       // full at +8 dB
-        const float notLoud = std::clamp((-11.0f - peakDb) / 6.0f, 0.0f, 1.0f);   // full below -17 dBFS
+        // Only near-full-scale hits (your own gun, explosions on top of you) are too loud: close
+        // enemies in a loud game mix can peak at -10 dBFS.
+        const float notLoud = std::clamp((-3.0f - peakDb) / 5.0f, 0.0f, 1.0f);    // full below -8 dBFS
         // Steps have a heel thump too, so some low end is fine; explosions / vehicles are 30+ dB bass-heavy.
         const float crunchy = std::clamp((tiltDb + 20.0f) / 8.0f, 0.0f, 1.0f);
         const float audible = std::clamp((peakDb + 66.0f) / 6.0f, 0.0f, 1.0f);    // above -60 dBFS
@@ -73,6 +75,7 @@ bool FootstepDetector::process(const float* x, std::size_t n) noexcept {
         onsetHist_[histPos_] = onset * audible;
         histPos_ = (histPos_ + 1) % kDelay;
         cand_ = delayedOnset * notLoud * crunchy;
+        dbg_ = Debug{jumpDb, peakDb, tiltDb, onset, notLoud, crunchy, audible};
     }
     return decided;
 }
@@ -193,15 +196,22 @@ void FootstepTracker::classify() noexcept {
     count(&Stats::impacts);
     const float az = std::atan2(y, x) * 180.0f / std::numbers::pi_v<float>;
     const float focus = std::sqrt(x * x + y * y) / total;  // 1 = one direction, 0 = all around
+    auto log = [&](Verdict v) {
+        if (log_)
+            log_->push_back(Event{static_cast<double>(impactStart_) / tickRate_, az, focus,
+                                  10.0f * std::log10(peak + 1e-20f), v});
+    };
 
     // Your own sounds: straight ahead, or no clear direction.
     if (focus < kMinFocus || angleDiff(az, 0.0f) < kCentreDeg) {
         count(&Stats::own);
+        log(Verdict::Own);
         return;
     }
     light(0);
     if (now_ < vetoUntil_) {  // a burst: not walking
         count(&Stats::single);
+        log(Verdict::Burst);
         return;
     }
 
@@ -250,6 +260,7 @@ void FootstepTracker::classify() noexcept {
         light(2);
         count(&Stats::strict);
     }
+    log(best->steady >= 3 ? Verdict::Steady : best->count >= 2 ? Verdict::Walk : Verdict::First);
 }
 
 }  // namespace tac

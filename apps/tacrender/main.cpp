@@ -7,6 +7,7 @@
 //   tacrender hrir-info <set.thrir>
 //   tacrender heads                                  list installed head (HRTF) sets
 //   tacrender audition <out-dir>                     render a test scene through every head
+//   tacrender steps-report <capture.wav>             what the footstep detector hears in a recording
 //
 // HRTF: --head <name> | --sofa <file.sofa> | --hrir <file.thrir> | --spherical
 //       (default: SADIE II KU100 if installed, else bundled MIT KEMAR)
@@ -21,6 +22,7 @@
 
 #include "cli.h"
 #include "core/binaural_renderer.h"
+#include "core/footstep_detector.h"
 #include "core/hrtf.h"
 #include "core/layout.h"
 #include "core/scene.h"
@@ -43,6 +45,7 @@ int usage() {
         "  tacrender hrir-info <set.thrir>\n"
         "  tacrender heads                       list --head choices\n"
         "  tacrender audition <out-dir> [--scene compass|circle|battle]   one render per head\n"
+        "  tacrender steps-report <capture.wav> [--max <lines>]   footstep detector, impact by impact\n"
         "\n"
         "%s\n"
         "options: --block <n> --side <deg> --back <deg> --lfe-db <dB> --gain-db <dB>\n"
@@ -229,6 +232,98 @@ int cmdAudition(const Args& args) {
     return 0;
 }
 
+// Runs the footstep detector over a recording of game sound (Direct mode's "Record" button writes
+// one) and prints every impact with what became of it, plus clear onsets that never became one.
+int cmdStepsReport(const Args& a) {
+    if (a.positional.size() != 1) return usage();
+    const AudioBuffer in = readWav(a.positional[0]);
+    const std::size_t nch = in.numChannels();
+    const SpeakerLayout lay =
+        layoutFromChannelMask(in.channelMask ? in.channelMask : defaultChannelMask(static_cast<std::uint32_t>(nch)));
+    std::vector<float> az;
+    std::vector<bool> lfe;
+    for (std::size_t c = 0; c < nch; ++c) {
+        az.push_back(c < lay.size() ? lay.speakers[c].azimuthDeg : 0.0f);
+        lfe.push_back(c < lay.size() && lay.speakers[c].isLfe);
+    }
+    auto name = [&](std::size_t c) { return c < lay.size() ? lay.speakers[c].name.c_str() : "?"; };
+    std::printf("file: %s  %zu ch, %u Hz, %.1f s\n", a.positional[0].c_str(), nch, in.sampleRate,
+                static_cast<double>(in.numFrames()) / in.sampleRate);
+    for (std::size_t c = 0; c < nch; ++c) {
+        double e = 0;
+        float pk = 0;
+        for (float v : in.channels[c]) {
+            e += static_cast<double>(v) * v;
+            pk = std::max(pk, std::abs(v));
+        }
+        std::printf("  %-4s az %+5.0f  peak %6.1f dBFS  rms %6.1f dBFS\n", name(c), az[c], 20 * std::log10(pk + 1e-9),
+                    10 * std::log10(e / std::max<std::size_t>(1, in.numFrames()) + 1e-12));
+    }
+
+    FootstepTracker t(in.sampleRate, az, lfe);
+    std::vector<FootstepTracker::Event> events;
+    t.setLog(&events);
+    // Clear onsets per channel, judged 16 ms later like the detector does.
+    struct Onset {
+        double time;
+        std::size_t ch;
+        float jumpDb, peakDb, tiltDb, notLoud, crunchy;
+    };
+    std::vector<Onset> onsets;
+    const double tick = static_cast<double>(FootstepDetector::kDecim) / in.sampleRate;
+    std::vector<long long> pending(nch, -1), lastOnset(nch, -100000);
+    std::vector<float> jumpMax(nch, 0.0f);
+    std::vector<const float*> ptr(nch);
+    const std::size_t step = FootstepDetector::kDecim;
+    long long k = 0;
+    for (std::size_t off = 0; off + step <= in.numFrames(); off += step, ++k) {
+        for (std::size_t c = 0; c < nch; ++c) ptr[c] = in.channels[c].data() + off;
+        t.process(ptr.data(), step);
+        for (std::size_t c = 0; c < nch; ++c) {
+            if (lfe[c]) continue;
+            const auto& d = t.detector(c).debug();
+            if (pending[c] >= 0) {
+                jumpMax[c] = std::max(jumpMax[c], d.jumpDb);
+                if (k - pending[c] >= 48) {
+                    onsets.push_back(Onset{static_cast<double>(pending[c]) * tick, c, jumpMax[c], d.peakDb, d.tiltDb,
+                                           d.notLoud, d.crunchy});
+                    pending[c] = -1;
+                }
+            } else if (d.onset * d.audible >= 0.6f && k - lastOnset[c] > static_cast<long long>(0.15 / tick)) {
+                pending[c] = lastOnset[c] = k;
+                jumpMax[c] = d.jumpDb;
+            }
+        }
+    }
+
+    const int maxLines = static_cast<int>(a.num("--max", 400));
+    static const char* kVerdict[] = {"own sound (straight ahead / everywhere)", "burst (rapid hits)",
+                                     "first step (Sensitive only)", "walk (Sensitive + Balanced)", "steady walk (all levels)"};
+    int counts[5] = {};
+    std::printf("\nimpacts (%zu):\n  time     dir    focus  level   verdict\n", events.size());
+    int lines = 0;
+    for (const auto& e : events) {
+        ++counts[static_cast<int>(e.verdict)];
+        if (lines++ < maxLines)
+            std::printf("  %7.2f  %+5.0f  %5.2f  %6.1f  %s\n", e.timeSec, e.azimuthDeg, e.focus, e.levelDb,
+                        kVerdict[static_cast<int>(e.verdict)]);
+    }
+    std::printf("\nclear onsets per speaker (%zu) - judged 16 ms later:\n  time     spk   jump  peak    tilt   result\n",
+                onsets.size());
+    int tooLoud = 0, bassy = 0, passed = 0;
+    lines = 0;
+    for (const auto& o : onsets) {
+        const char* r = o.notLoud < 0.5f ? "dropped: too loud" : o.crunchy < 0.5f ? "dropped: bass-heavy" : "ok";
+        (o.notLoud < 0.5f ? tooLoud : o.crunchy < 0.5f ? bassy : passed)++;
+        if (lines++ < maxLines)
+            std::printf("  %7.2f  %-4s %5.1f  %6.1f  %+6.1f  %s\n", o.time, name(o.ch), o.jumpDb, o.peakDb, o.tiltDb, r);
+    }
+    std::printf("\nsummary: %zu impacts - own %d, burst %d, first step %d, walk %d, steady %d\n", events.size(), counts[0],
+                counts[1], counts[2], counts[3], counts[4]);
+    std::printf("         %zu clear onsets - ok %d, too loud %d, bass-heavy %d\n", onsets.size(), passed, tooLoud, bassy);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -243,6 +338,7 @@ int main(int argc, char** argv) {
         if (cmd == "hrir-info") return cmdHrirInfo(a);
         if (cmd == "heads") return cmdHeads();
         if (cmd == "audition") return cmdAudition(a);
+        if (cmd == "steps-report") return cmdStepsReport(a);
         return usage();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
