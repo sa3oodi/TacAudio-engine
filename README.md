@@ -54,7 +54,7 @@ icon and hotkeys.
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
-| 🖥️ **Everyday app** | Tray icon, start with Windows, global hotkeys, per-option reset buttons |
+| 🖥️ **Everyday app** | Tray icon, start with Windows, global hotkeys, per-option reset buttons, update check |
 | 🔌 **VB-CABLE mode** | Optional fallback for setups where Direct mode can't be used |
 
 ## Download and install
@@ -109,7 +109,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
-| **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys |
+| **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys, update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
 
 | Hotkey | Action |
 |---|---|
@@ -250,7 +250,7 @@ installer/         Inno Setup script        scripts/  build_installer.ps1
 
 - Headphone correction EQ per model
 - Upmix for stereo-only games
-- Code-signed installer and auto-update
+- Code-signed installer
 
 ## Credits
 

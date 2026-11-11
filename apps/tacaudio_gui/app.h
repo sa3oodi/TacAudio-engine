@@ -15,6 +15,7 @@
 #include "game_library.h"
 #include "imgui.h"
 #include "profiles.h"
+#include "update_check.h"
 #include "session.h"
 
 namespace tac {
@@ -34,6 +35,7 @@ struct AppSettings {
     bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
     bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)
     bool autoProfiles = true;       // switch the game profile when a game comes to the front
+    bool checkUpdates = true;       // ask GitHub for a newer release (at launch, then twice a day)
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
@@ -87,6 +89,8 @@ private:
 
     // Game profiles.
     void pollProfiles();
+    void pollUpdates();
+    void checkUpdatesNow();
     void activateProfile(int index);
     int profileForGame(const GameEntry& g) const;
     int findProfile(const std::string& exe, const std::string& path) const;
@@ -171,6 +175,13 @@ private:
     };
     std::map<std::wstring, Cover> covers_;
     std::future<std::pair<std::wstring, Image>> coverJob_;
+
+    // Update check.
+    std::future<ReleaseInfo> updJob_;
+    std::optional<ReleaseInfo> update_;    // a newer release than this build
+    std::string updStatus_;
+    bool updDismissed_ = false;
+    std::chrono::steady_clock::time_point nextUpdCheck_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 };
 
 }  // namespace tac

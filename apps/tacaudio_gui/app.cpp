@@ -78,6 +78,7 @@ AppSettings loadSettings() {
             else if (k == "hotkeys") s.hotkeys = v == "1";
             else if (k == "setupDone") s.setupDone = v == "1";
             else if (k == "autoProfiles") s.autoProfiles = v == "1";
+            else if (k == "checkUpdates") s.checkUpdates = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -126,7 +127,8 @@ void saveSettings(const AppSettings& s) {
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
       << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
-      << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0) << "\n";
+      << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
+      << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\n";
 }
 
 namespace {
@@ -394,6 +396,7 @@ void App::pollBackground() {
     }
     pollSetupJobs();
     pollProfiles();
+    pollUpdates();
     pollDirect();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
@@ -444,7 +447,7 @@ void App::pollBackground() {
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
                          cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
-                         cfg_.autoProfiles != saved_.autoProfiles;
+                         cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -665,6 +668,22 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         ImGui::SetCursorScreenPos(ep + ImVec2(avail - S(34), S(5)));
         if (iconButton("##dismiss", "\xEE\x9C\x91", "Dismiss", true, 28)) error_.clear();  // U+E711 close
         ImGui::SetCursorScreenPos(ImVec2(ep.x, ep.y + h + S(12)));
+    }
+    if (update_ && !updDismissed_) {  // a newer release is out
+        const ImVec2 up = ImGui::GetCursorScreenPos();
+        const float h = S(42);
+        dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Accent, 0.14f), S(8));
+        dl->AddText(fonts.regular, S(15), up + ImVec2(S(14), S(12)), col::Accent, icon::Refresh);
+        char b[160];
+        std::snprintf(b, sizeof(b), "TacAudio %s is available - you have %s. Your settings and profiles are kept.",
+                      update_->version.c_str(), TAC_VERSION);
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text, b);
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
+        if (pillButton("Download", col::Accent, IM_COL32(20, 14, 8, 255), S(140)))
+            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34), S(7)));
+        if (iconButton("##updclose", "\xEE\x9C\x91", "Remind me later", true, 28)) updDismissed_ = true;  // U+E711
+        ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
     }
     ImGui::Dummy(ImVec2(0, 0));
     return resetClicked;
@@ -986,6 +1005,24 @@ void App::pageSettings() {
     keyRow(kHotkey3d, "3D sound on / off (instant A/B against plain stereo)");
     ImGui::EndDisabled();
     endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    beginCard("##updates", "Updates", nullptr, 0);
+    toggleRow("Check for updates", &cfg_.checkUpdates,
+              "Asks GitHub for a newer TacAudio when it starts and twice a day. Nothing is installed by itself.",
+              def.checkUpdates);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
+    if (pillButton(updJob_.valid() ? "Checking..." : "Check now", col::CardHi, col::Text, S(130)) && !updJob_.valid())
+        checkUpdatesNow();
+    ImGui::SameLine(0, S(14));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
+    ui::text(updStatus_.empty() ? "Version " TAC_VERSION : updStatus_.c_str(), update_ ? col::Accent : col::Dim, 13.0f);
+    if (update_) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
+        if (pillButton("Open download page", col::Accent, IM_COL32(20, 14, 8, 255), S(190)))
+            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    endCard();
 }
 
 // ------------------------------------------------------------------ Setup assistant
@@ -1289,6 +1326,37 @@ void App::setupCable() {
         ImGui::SameLine(0, S(14));
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
         ui::text("Finish steps 1 and 2 first.", col::Faint, 12.5f);
+    }
+}
+
+// ------------------------------------------------------------------ Update check
+void App::checkUpdatesNow() {
+    if (preview_ || updJob_.valid()) return;
+    updStatus_ = "Checking...";
+    updJob_ = std::async(std::launch::async, fetchLatestRelease);
+}
+
+void App::pollUpdates() {
+    using namespace std::chrono;
+    if (updJob_.valid() && updJob_.wait_for(seconds(0)) == std::future_status::ready) {
+        try {
+            const ReleaseInfo r = updJob_.get();
+            if (isNewerVersion(r.version, TAC_VERSION)) {
+                if (!update_ || update_->version != r.version) updDismissed_ = false;
+                update_ = r;
+                updStatus_ = "TacAudio " + r.version + " is available (you have " TAC_VERSION ").";
+            } else {
+                update_.reset();
+                updStatus_ = "You have the latest version (" TAC_VERSION ").";
+            }
+        } catch (const std::exception& e) {
+            updStatus_ = std::string("Could not check: ") + e.what();
+        }
+    }
+    const auto now = steady_clock::now();
+    if (cfg_.checkUpdates && !preview_ && now >= nextUpdCheck_) {
+        nextUpdCheck_ = now + hours(12);
+        checkUpdatesNow();
     }
 }
 
