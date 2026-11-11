@@ -5,9 +5,11 @@
 //
 // 1. FootstepDetector (per channel) finds footstep-like *impacts*: a short sound whose energy sits
 //    in the crunch band (~1.5-6 kHz), at a moderate level. It requires all of
-//      * an onset: the band's level (5 ms) jumps above its own background (300 ms)
+//      * an onset: the band's level (5 ms) jumps above its background (the quiet level between
+//        sounds, so a run of steps does not hide the next one)
 //      * not near full scale: your own gunfire and explosions on top of you
-//      * not bass-heavy: crunch within ~15 dB of the low end (explosions / vehicles are rumble)
+//      * not bass-heavy: judged on what the sound added in the crunch band vs in the bass, so a
+//        steady rumble on the same speaker does not count against a step (explosions are rumble)
 //      * audible: above the noise floor
 //    Onsets are judged 16 ms later, once the whole sound is there.
 //
@@ -20,13 +22,19 @@
 //      * the rest is reported at three levels (the app picks one, "Detection"):
 //          Sensitive - every placed impact
 //          Balanced  - an impact that follows another from the same direction (within 60
-//                      degrees) 0.2-1.2 s earlier: the second step of a walk on. Single clicks,
+//                      degrees) 0.1-1.2 s earlier: the second step of a walk on. Single clicks,
 //                      single shots and bullet hits are dropped.
 //          Strict    - three steps or more at a steady pace (each gap 0.7-1.43x the previous one,
 //                      once walking, one missed step allowed). Reloads and most gunfire are
 //                      dropped.
-//      * Balanced and Strict also skip bursts: onsets every < 0.2 s, twice in a row
-//        (automatic fire, rattles) block them for 0.5 s.
+//      * Balanced and Strict also skip bursts: onsets every < 0.15 s on a speaker at an even rate
+//        (gaps within 12 %), three gaps in a row - automatic fire. Sprinting steps are just as fast
+//        but uneven. A burst blocks that speaker for 0.5 s. They decide 0.25 s after an
+//        impact, so the first shots of a burst are caught too; Sensitive shows impacts at once.
+//    Everything is judged per speaker: in a match some speaker always has something going on, so
+//    an impact's direction comes only from the speakers that carry it.
+//      * a step fades: a sound whose speaker stays 10 dB above the earlier background for the
+//        next 0.1-0.25 s (rain or wind starting, an engine) is not a step (Balanced / Strict).
 //    Counters tell the app what was heard and why it was dropped.
 // Real-time safe (no allocation after construction, no locks).
 
@@ -49,7 +57,10 @@ public:
     bool process(const float* x, std::size_t n) noexcept;
     float candidate() const noexcept { return cand_; }  // 0..1: an impact that looks like a step
     // Band energy above the channel's own background (what the impact added), 20 ms.
-    float excessEnergy() const noexcept { return bandE_ > slow_ ? bandE_ - slow_ : 0.0f; }
+    float excessEnergy() const noexcept { return bandE_ > floor_ ? bandE_ - floor_ : 0.0f; }
+    float bandEnergy() const noexcept { return bandE_; }  // crunch band, 20 ms
+    // Crunch band background when the latest candidate's onset happened (16 ms ago).
+    float onsetFloor() const noexcept { return floorHist_[histPos_]; }
     void reset() noexcept;
 
     // The latest decision's measurements (for the steps-report tool).
@@ -65,12 +76,15 @@ private:
     float bandE_ = 0, lowE_ = 0;    // band / rumble energy, 20 ms
     float peak_ = 0;                // full-band peak, 50 ms release
     float cand_ = 0;
+    float floor_ = 0, lowFloor_ = 0;  // background (quiet level between sounds): band, rumble
+    float cFloorUp_ = 0, cFloorDown_ = 0;
     Debug dbg_;
     float cFast_, cSlow_, c20_, cPeak_;
     int tick_ = 0;
     // An explosion's first milliseconds can look crunchy before its rumble builds up.
     static constexpr int kDelay = 48;  // decisions (16 ms at 3 kHz)
     float onsetHist_[kDelay] = {};
+    float floorHist_[kDelay] = {};
     int histPos_ = 0;
 };
 
@@ -101,7 +115,7 @@ public:
     const Stats& totals() const noexcept { return total_; }
 
     // Offline analysis (steps-report): every impact and what became of it. Not real-time safe.
-    enum class Verdict { Own, Burst, First, Walk, Steady };
+    enum class Verdict { Own, Burst, First, Walk, Steady, Sustained };
     struct Event {
         double timeSec = 0;
         float azimuthDeg = 0, focus = 0, levelDb = 0;
@@ -116,9 +130,20 @@ public:
     }
 
 private:
+    using Levels = std::array<float, kMaxChannels>;
+    // An impact waiting for its Balanced / Strict verdict (0.25 s, so a burst can show itself).
+    struct Pending {
+        std::int64_t start = 0;
+        float az = 0, focus = 0, levelDb = 0;
+        std::size_t dom = 0;  // loudest speaker
+        Levels e{};
+        float floor0 = 0;     // its speaker's background when it started
+        float minAfter = 0;   // its speaker's quietest level 0.1-0.25 s later (steps fade, rain does not)
+    };
     void decide() noexcept;
     void classify() noexcept;
-    void light(int level) noexcept;
+    void confirm(const Pending& p) noexcept;
+    void light(int level, const Levels& e) noexcept;
     void count(int Stats::*field) noexcept {
         ++(total_.*field);
         ++(fresh_.*field);
@@ -139,16 +164,23 @@ private:
     std::array<bool, kMaxChannels> lfe_{};
     int phase_ = 0;                 // samples into the current decision
     std::int64_t now_ = 0;          // decisions so far
-    // An impact starts at an onset and is measured for 40 ms; onsets in the next 150 ms belong to
-    // it (one step's heel, gravel and toe).
-    bool high_ = false;             // candidate above the rise threshold
+    // Per speaker: a game mix always has something going on somewhere, so onsets, bursts and an
+    // impact's direction are judged on each speaker by itself.
+    // An impact starts at an onset and is measured for 40 ms, on the speakers that carry it; a
+    // speaker's onsets in the next 150 ms belong to the same impact (heel, gravel, toe).
+    std::array<bool, kMaxChannels> high_{};        // candidate above the rise threshold
+    std::array<bool, kMaxChannels> part_{};        // speaker carries the impact being measured
+    std::array<std::int64_t, kMaxChannels> lastImpact_{}, lastRise_{}, vetoUntil_{};
+    // Bursts: onsets every < 0.15 s at an even rate, three gaps in a row (automatic fire).
+    std::array<int, kMaxChannels> shortRun_{};
+    std::array<double, kMaxChannels> prevGap_{};  // seconds
+    std::array<std::int64_t, kMaxChannels> burstAt_{};  // last burst seen on the speaker
+    std::array<Pending, 16> pending_{};
+    std::size_t pendHead_ = 0, pendCount_ = 0;
     bool measuring_ = false;
-    std::int64_t impactStart_ = -1000000;
-    // Bursts: onsets keep coming every < 0.2 s (automatic fire, a rattle). One step is heel + toe
-    // and then a pause, so two short gaps in a row is not walking.
-    std::int64_t lastRise_ = -1000000, vetoUntil_ = 0;
-    int shortRun_ = 0;
+    std::int64_t impactStart_ = 0;
     std::array<float, kMaxChannels> evE_{};
+    std::array<float, kMaxChannels> startFloor_{};  // each speaker's background before the impact
     std::array<Walk, 4> walks_{};
     std::array<std::array<float, kMaxChannels>, kLevels> act_{}, max_{};
     float cRel_ = 0;

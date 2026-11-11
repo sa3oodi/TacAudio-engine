@@ -298,8 +298,9 @@ int cmdStepsReport(const Args& a) {
 
     const int maxLines = static_cast<int>(a.num("--max", 400));
     static const char* kVerdict[] = {"own sound (straight ahead / everywhere)", "burst (rapid hits)",
-                                     "first step (Sensitive only)", "walk (Sensitive + Balanced)", "steady walk (all levels)"};
-    int counts[5] = {};
+                                     "first step (Sensitive only)", "walk (Sensitive + Balanced)", "steady walk (all levels)",
+                                     "keeps going (rain / engine)"};
+    int counts[6] = {};
     std::printf("\nimpacts (%zu):\n  time     dir    focus  level   verdict\n", events.size());
     int lines = 0;
     for (const auto& e : events) {
@@ -318,8 +319,8 @@ int cmdStepsReport(const Args& a) {
         if (lines++ < maxLines)
             std::printf("  %7.2f  %-4s %5.1f  %6.1f  %+6.1f  %s\n", o.time, name(o.ch), o.jumpDb, o.peakDb, o.tiltDb, r);
     }
-    std::printf("\nsummary: %zu impacts - own %d, burst %d, first step %d, walk %d, steady %d\n", events.size(), counts[0],
-                counts[1], counts[2], counts[3], counts[4]);
+    std::printf("\nsummary: %zu impacts - own %d, burst %d, keeps going %d, first step %d, walk %d, steady %d\n",
+                events.size(), counts[0], counts[1], counts[5], counts[2], counts[3], counts[4]);
     std::printf("         %zu clear onsets - ok %d, too loud %d, bass-heavy %d\n", onsets.size(), passed, tooLoud, bassy);
     return 0;
 }
