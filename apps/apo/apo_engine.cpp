@@ -60,6 +60,7 @@ ApoSettings readSettings(const std::filesystem::path& file) {
             else if (k == "stepsOn") stepsOn = v == "1";
             else if (k == "stepsLevel") steps = std::stof(v);
             else if (k == "bass") s.bassDb = std::stof(v);
+            else if (k == "stepsSmart") s.footstepsSmart = v == "1";
             else if (k == "enabled") s.enabled = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
@@ -154,6 +155,7 @@ void ApoEngine::worker() {
             a.opts["--dynamics"] = s.dynamics;
             a.opts["--punch"] = std::to_string(s.punch);
             a.opts["--footsteps"] = std::to_string(s.footstepsDb);
+            a.opts["--footsteps-smart"] = s.footstepsSmart ? "1" : "0";
             a.opts["--lfe-db"] = std::to_string(s.bassDb);
             a.opts["--gain-db"] = "0";
             const BinauralConfig cfg = cli::binauralFrom(a, 0.0f, kBlock, s.room, s.dynamics);

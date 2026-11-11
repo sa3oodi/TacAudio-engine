@@ -14,6 +14,9 @@ namespace tac::apoctl {
 // Playback devices (endpoint ids as in wasapi::DeviceInfo::id) the engine is attached to.
 bool attachedTo(const std::wstring& endpointId);
 bool dllInstalled();
+// true if the installed engine DLL differs from the one shipped next to this app (the app was
+// updated, the engine in Windows audio not yet). Reinstalling copies the new one.
+bool engineOutdated();
 
 std::filesystem::path dataDir();  // %ProgramData%\TacAudio
 

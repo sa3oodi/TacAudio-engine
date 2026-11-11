@@ -29,6 +29,7 @@ struct AppSettings {
     std::string dynPreset = "medium";
     bool stepsOn = true;
     float stepsLevel = 3.0f;
+    bool stepsSmart = true;
 
     // App behaviour.
     bool startWithWindows = false;  // mirrored from the registry Run key
@@ -43,6 +44,7 @@ struct AppSettings {
         SoundSettings s = sound;
         s.dynamics = dynOn ? dynPreset : "off";
         s.footstepsDb = stepsOn ? stepsLevel : 0.0f;
+        s.footstepsSmart = stepsSmart;
         return s;
     }
 };
@@ -162,6 +164,7 @@ private:
     std::string lastApoIni_;
     std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
     std::optional<apoctl::Status> apoStatus_;
+    bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
 
     // Game profiles and the game library (Profiles page).
     std::vector<GameProfile> profiles_;

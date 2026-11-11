@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "core/binaural_renderer.h"
+#include "core/biquad.h"
+#include "core/dynamics.h"
 #include "core/convolver.h"
 #include "core/fft.h"
 #include "core/hrtf.h"
@@ -933,6 +935,7 @@ void testFootstepBoost() {
     // Quiet 3.5 kHz content (footstep crunch) is lifted; the same band when loud (gun crack) is not.
     DynamicsParams p = dynamicsPreset("off");
     p.footstepDb = 6.0f;
+    p.footstepSmart = false;  // classic: any quiet sound in the band
     CHECK(p.active());
     auto gainAt = [&](double inDb, double hz) {
         const double fs = 48000;
@@ -950,6 +953,58 @@ void testFootstepBoost() {
     CHECK_NEAR(gainAt(-45.0, 3500.0), 6.0, 0.6);  // quiet crunch: full +6 dB
     CHECK_NEAR(gainAt(-10.0, 3500.0), 0.0, 0.3);  // loud crack: untouched
     CHECK_NEAR(gainAt(-45.0, 200.0), 0.0, 0.5);   // quiet but off-band: untouched
+}
+
+void testSmartFootsteps() {
+    // Smart mode: short impacts in the footstep band are lifted, a steady sound in the same band
+    // (rain, engine hum) is not.
+    DynamicsParams p = dynamicsPreset("off");
+    p.footstepDb = 6.0f;
+    p.footstepSmart = true;
+    const double fs = 48000;
+    Rng rng;
+    auto bandNoise = [&](std::size_t n) {  // noise around 3.5 kHz
+        Biquad bp = Biquad::bandpass(fs, 3500.0, 0.8);
+        std::vector<float> v(n);
+        for (auto& x : v) x = bp.process(rng.next());
+        return v;
+    };
+    auto scale = [](std::vector<float>& v, double db) {
+        const double g = std::pow(10.0, db / 20.0) / std::sqrt(energy(v) / static_cast<double>(v.size()));
+        for (auto& x : v) x = static_cast<float>(x * g);
+    };
+    auto gainDb = [&](const std::vector<float>& in, std::size_t from) {
+        ChannelDynamics d(fs, 1, p);
+        std::vector<float> x = in;
+        float* ptr[1] = {x.data()};
+        d.process(ptr, x.size());
+        const auto L = static_cast<std::ptrdiff_t>(d.latency());
+        const auto f = static_cast<std::ptrdiff_t>(from);
+        return 10 * std::log10(energy(std::vector<float>(x.begin() + f, x.end())) /
+                               energy(std::vector<float>(in.begin() + f - L, in.end() - L)));
+    };
+    // Steady band noise at -45 dB (rain, engine): classic mode lifts it, smart mode does not.
+    std::vector<float> steady = bandNoise(96000);
+    scale(steady, -45.0);
+    const double steadySmart = gainDb(steady, 48000);
+    p.footstepSmart = false;
+    const double steadyClassic = gainDb(steady, 48000);
+    // Footsteps: 60 ms bursts every 400 ms at -40 dB: smart mode lifts them about as much as classic.
+    std::vector<float> burst = bandNoise(2880);
+    scale(burst, -40.0);
+    std::vector<float> steps(96000, 0.0f);
+    for (std::size_t s = 0; s + burst.size() < steps.size(); s += 19200)
+        for (std::size_t i = 0; i < burst.size(); ++i)
+            steps[s + i] = burst[i] * std::sin(std::numbers::pi_v<float> * static_cast<float>(i) / static_cast<float>(burst.size()));
+    const double stepsClassic = gainDb(steps, 48000);
+    p.footstepSmart = true;
+    const double stepsSmart = gainDb(steps, 48000);
+    std::printf("    steady: classic %+.1f dB, smart %+.1f dB | steps: classic %+.1f dB, smart %+.1f dB\n",
+                steadyClassic, steadySmart, stepsClassic, stepsSmart);
+    CHECK(steadyClassic > 3.0);
+    CHECK(steadySmart < 1.0);
+    CHECK(stepsSmart > stepsClassic - 1.0);
+    CHECK(stepsSmart > 3.0);
 }
 
 #ifdef TAC_TEST_SOFA_FILE
@@ -1011,6 +1066,7 @@ int main() {
         {"room reverb presets", testRoom},
         {"M3 dynamics: tame loud, lift quiet, independent channels", testDynamics},
         {"M3 footstep boost: quiet band only", testFootstepBoost},
+        {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE
         {"SOFA import: MIT KEMAR conventions", testSofaKemar},

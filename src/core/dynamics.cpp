@@ -55,10 +55,16 @@ ChannelDynamics::ChannelDynamics(double fs, std::size_t channels, const Dynamics
     relCoef_ = coef(std::max(1.0f, p.releaseMs), fs);
     makeup_ = p.enabled ? std::pow(10.0f, p.makeupDb / 20.0f) : 1.0f;
     stepMax_ = std::pow(10.0f, std::max(0.0f, p.footstepDb) / 20.0f) - 1.0f;  // extra band gain
-    stepCoef_ = coef(20.0, fs);                                               // smooth band gain changes
+    stepAtt_ = coef(3.0, fs);   // band gain follows a step's onset quickly...
+    stepRel_ = coef(30.0, fs);  // ...and fades smoothly (no zipper noise)
+    fastCoef_ = coef(5.0, fs);
+    slowCoef_ = coef(250.0, fs);
+    impAtt_ = coef(1.0, fs);
+    impRel_ = coef(std::max(1.0f, p.smartHoldMs), fs);
     for (auto& c : ch_) {
         c.delay.assign(lookahead_, 0.0f);
         c.band = Biquad::bandpass(fs, p.footstepHz, p.footstepQ);
+        c.detBand = Biquad::bandpass(fs, p.footstepHz, p.footstepQ);
     }
 }
 
@@ -70,6 +76,8 @@ void ChannelDynamics::reset() noexcept {
         c.gainDb = 0.0f;
         c.band.reset();
         c.stepGain = 0.0f;
+        c.detBand.reset();
+        c.bandFast = c.bandSlow = c.impact = 0.0f;
     }
     pos_ = 0;
 }
@@ -98,6 +106,8 @@ void ChannelDynamics::process(float* const* io, std::size_t n) noexcept {
     if (!p_.active()) return;
     const bool comp = p_.enabled;
     const bool steps = stepMax_ > 0.0f;
+    const bool smart = steps && p_.footstepSmart;
+    const float onsetSpan = std::max(0.1f, p_.smartFullDb - p_.smartOnsetDb);
     for (std::size_t c = 0; c < ch_.size(); ++c) {
         Channel& s = ch_[c];
         float* x = io[c];
@@ -120,6 +130,19 @@ void ChannelDynamics::process(float* const* io, std::size_t n) noexcept {
                 maxGainDb_ = std::max(maxGainDb_, s.gainDb);
             }
 
+            float impact = 1.0f;
+            if (smart) {
+                // Band energy now vs. its recent background, measured ahead of the delayed audio.
+                const float b = s.detBand.process(in);
+                const float e = b * b;
+                s.bandFast = e + (s.bandFast - e) * fastCoef_;
+                s.bandSlow = e + (s.bandSlow - e) * slowCoef_;
+                const float jumpDb = 10.0f * std::log10((s.bandFast + 1e-14f) / (s.bandSlow + 1e-14f));
+                const float want = std::clamp((jumpDb - p_.smartOnsetDb) / onsetSpan, 0.0f, 1.0f);
+                s.impact = want + (s.impact - want) * (want > s.impact ? impAtt_ : impRel_);
+                impact = s.impact;
+            }
+
             const float delayed = s.delay[pos];
             s.delay[pos] = in;
             if (++pos == lookahead_) pos = 0;
@@ -128,8 +151,8 @@ void ChannelDynamics::process(float* const* io, std::size_t n) noexcept {
             if (steps) {
                 // Full band boost while quiet, fading out over the 10 dB above footstepBelowDb.
                 const float quiet = std::clamp((p_.footstepBelowDb + 10.0f - level) / 10.0f, 0.0f, 1.0f);
-                const float want = stepMax_ * quiet;
-                s.stepGain = want + (s.stepGain - want) * stepCoef_;
+                const float want = stepMax_ * quiet * impact;
+                s.stepGain = want + (s.stepGain - want) * (want > s.stepGain ? stepAtt_ : stepRel_);
                 y += s.stepGain * s.band.process(delayed);
             }
             x[i] = comp ? y * std::pow(10.0f, s.gainDb / 20.0f) * makeup_ : y;

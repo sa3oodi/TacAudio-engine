@@ -50,7 +50,7 @@ icon and hotkeys.
 | 👂 **Find your head** | 2-minute listening test: noise bursts from 8 directions through each head, you click where you heard them, TacAudio picks the head with the most accurate directions and fewest front/back mix-ups |
 | 🏠 **Room presets** | Neutral (dry, most precise), Balanced (small room), Spacious |
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
-| 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB |
+| 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB. *Smart* mode lifts only short impacts (steps, landings, reloads) and leaves steady sounds in the same band (rain, wind, engines) alone |
 | 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
@@ -187,6 +187,7 @@ lock-free ring buffer with drift compensation and an adaptive buffer, then exclu
 | CPU | ~2 % of one core |
 | Gunfire vs. footsteps (battle test scene) | 31 dB &rarr; 21 dB (medium) &rarr; 16 dB (strong) |
 | Gunshot crack kept with punch 60 | 32 dB vs. 34 dB without dynamics (24 dB at punch 0) |
+| Smart footsteps: steady band noise / footstep bursts | classic +4.5 / +4.3 dB, smart **+0.0** / +4.0 dB |
 | Raw MIT KEMAR average at 2 - 3 kHz | +17.8 dB &rarr; flat within ±1.5 dB after equalisation |
 
 ## Build from source

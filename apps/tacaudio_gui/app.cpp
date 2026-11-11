@@ -48,6 +48,28 @@ int indexOf(const std::vector<std::string>& v, const std::string& s, int fallbac
 }
 
 float toDb(float lin) { return lin > 1e-6f ? 20.0f * std::log10(lin) : -120.0f; }
+
+// Wrapped paragraph.
+void para(const char* s, ImU32 color = ui::col::Dim, float size = 13.5f) {
+    ImGui::PushFont(ui::fonts.regular, size);
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(s);
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+// Primary (orange) or secondary button; drawn greyed out and inert when disabled.
+bool actionButton(const char* label, bool primary, bool enabled = true, float width = 0.0f) {
+    const ImU32 bg = !enabled ? ui::col::Well : primary ? ui::col::Accent : ui::col::CardHi;
+    const ImU32 fg = !enabled ? ui::col::Faint : primary ? IM_COL32(20, 14, 8, 255) : ui::col::Text;
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = ui::pillButton(label, bg, fg, width);
+    ImGui::EndDisabled();
+    return clicked && enabled;
+}
+
 }  // namespace
 
 AppSettings loadSettings() {
@@ -74,6 +96,7 @@ AppSettings loadSettings() {
             else if (k == "stepsOn") s.stepsOn = v == "1";
             else if (k == "stepsLevel") s.stepsLevel = std::stof(v);
             else if (k == "bass") s.sound.bassDb = std::stof(v);
+            else if (k == "stepsSmart") s.stepsSmart = v == "1";
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
@@ -126,7 +149,7 @@ void saveSettings(const AppSettings& s) {
       << "\nhead=" << s.sound.head << "\nroom=" << s.sound.room << "\npunch=" << s.sound.punch
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
-      << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
+      << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\n";
@@ -140,6 +163,7 @@ SoundBundle bundleOf(const AppSettings& s) {
     b.dynPreset = s.dynPreset;
     b.stepsOn = s.stepsOn;
     b.stepsLevel = s.stepsLevel;
+    b.stepsSmart = s.stepsSmart;
     return b;
 }
 void applyBundle(AppSettings& s, const SoundBundle& b) {
@@ -148,6 +172,7 @@ void applyBundle(AppSettings& s, const SoundBundle& b) {
     s.dynPreset = b.dynPreset;
     s.stepsOn = b.stepsOn;
     s.stepsLevel = b.stepsLevel;
+    s.stepsSmart = b.stepsSmart;
 }
 }  // namespace
 
@@ -164,6 +189,7 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         if (GetEnvironmentVariableA("TACAUDIO_SMOKE_HEADTEST", dev, sizeof(dev)) && dev[0]) htDevice_ = dev;
     }
     refreshDevices();
+    if (!preview_) engineOutdated_ = direct_ && apoctl::engineOutdated();
     for (const auto& h : cli::listHeads()) {
         headNames_.push_back(h.name);
         headDescs_.push_back(h.description);
@@ -465,10 +491,10 @@ std::string App::apoIniText() const {
     char b[512];
     std::snprintf(b, sizeof(b),
                   "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
-                  "stepsLevel=%g\nbass=%g\n",
-                  wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch, cfg_.sound.volumeDb,
-                  cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(), cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel,
-                  cfg_.sound.bassDb);
+                  "stepsLevel=%g\nstepsSmart=%d\nbass=%g\n",
+                  wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
+                  cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
+                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
     return b;
 }
 
@@ -479,6 +505,7 @@ void App::pollDirect() {
         apoMsg_ = code == 0 ? std::string() : code < 0 ? "Cancelled - administrator permission is needed."
                                                        : "Something went wrong - details in %TEMP%\\tacapo_setup.txt";
         refreshDevices();
+        engineOutdated_ = direct_ && apoctl::engineOutdated();
         lastApoIni_.clear();  // re-send the settings to a fresh install
         if (code == 0 && direct_ && apoJobLabel_ == "Installing") wantRunning_ = true;
     }
@@ -676,6 +703,18 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         if (iconButton("##dismiss", "\xEE\x9C\x91", "Dismiss", true, 28)) error_.clear();  // U+E711 close
         ImGui::SetCursorScreenPos(ImVec2(ep.x, ep.y + h + S(12)));
     }
+    if (engineOutdated_ && direct_ && !preview_) {  // app updated, engine in Windows audio not yet
+        const ImVec2 up = ImGui::GetCursorScreenPos();
+        const float h = S(42);
+        dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Teal, 0.12f), S(8));
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(14), S(12)), col::Text,
+                    apoJob_.valid() ? "Updating the engine... (approve the Windows prompt; sound pauses for a few seconds)"
+                                    : "TacAudio was updated - update its engine in Windows audio to get the new sound features.");
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(170), S(4)));
+        if (actionButton("Update engine", true, !apoJob_.valid(), S(160)))
+            runApoSetup("Installing", {L"install", L"--device", fromUtf8(cfg_.dev.output)});
+        ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
+    }
     if (update_ && !updDismissed_) {  // a newer release is out
         const ImVec2 up = ImGui::GetCursorScreenPos();
         const float h = S(42);
@@ -713,6 +752,7 @@ void App::pageSound() {
         cfg_.dynPreset = def.dynPreset;
         cfg_.stepsOn = def.stepsOn;
         cfg_.stepsLevel = def.stepsLevel;
+        cfg_.stepsSmart = def.stepsSmart;
         session_.setVolumeDb(cfg_.sound.volumeDb);
         session_.set3d(cfg_.sound.enabled3d);
         requestRebuild();
@@ -770,7 +810,8 @@ void App::pageSound() {
     ImGui::SameLine(0, gap);
     beginCard("##steps", "Footstep clarity", &cfg_.stepsOn, colW,
               "Lifts the footstep 'crunch' band around 3.5 kHz, only while a channel is quiet - "
-              "gun cracks in the same band are not boosted.");
+              "gun cracks in the same band are not boosted. Smart: only short impacts (steps, landings, reloads), "
+              "not rain, wind or engines.");
     if (cardToggleChanged()) requestRebuild();
     {
         const double fs = 48000.0;
@@ -798,7 +839,9 @@ void App::pageSound() {
                   "Amount of footstep clarity. +3 dB is subtle, +6 dB is clear, +9 dB and more is very strong.",
                   col::Teal) == Edit::Commit)
         requestRebuild();
-    ImGui::Dummy(ImVec2(0, S(37)));  // match the dynamics card height (it has one more row)
+    if (toggleRow("Smart", &cfg_.stepsSmart, "Impacts only", def.stepsSmart)) requestRebuild();
+    if (ImGui::IsItemHovered())
+        tooltip("Boost only short impacts in the footstep band. Steady sounds there - rain, wind, engines - are not lifted.");
     endCard();
     ImGui::Dummy(ImVec2(0, gap - S(10)));
 
@@ -1039,27 +1082,6 @@ void App::pageSettings() {
 namespace {
 void openShell(const wchar_t* file, const wchar_t* params = nullptr) {
     ShellExecuteW(nullptr, L"open", file, params, nullptr, SW_SHOWNORMAL);
-}
-
-// Wrapped paragraph.
-void para(const char* s, ImU32 color = col::Dim, float size = 13.5f) {
-    ImGui::PushFont(fonts.regular, size);
-    ImGui::PushStyleColor(ImGuiCol_Text, color);
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(s);
-    ImGui::PopTextWrapPos();
-    ImGui::PopStyleColor();
-    ImGui::PopFont();
-}
-
-// Primary (orange) or secondary button; drawn greyed out and inert when disabled.
-bool actionButton(const char* label, bool primary, bool enabled = true, float width = 0.0f) {
-    const ImU32 bg = !enabled ? col::Well : primary ? col::Accent : col::CardHi;
-    const ImU32 fg = !enabled ? col::Faint : primary ? IM_COL32(20, 14, 8, 255) : col::Text;
-    ImGui::BeginDisabled(!enabled);
-    const bool clicked = pillButton(label, bg, fg, width);
-    ImGui::EndDisabled();
-    return clicked && enabled;
 }
 
 enum class Step { Done, Todo, Warn, Locked };
@@ -2025,7 +2047,8 @@ void App::pageProfiles() {
                 row("Room", b.sound.room.c_str());
                 std::snprintf(line, sizeof(line), "%s, punch %.0f", b.dynOn ? b.dynPreset.c_str() : "off", b.sound.punch);
                 row("Dynamics", line);
-                std::snprintf(line, sizeof(line), b.stepsOn ? "+%.1f dB" : "off", b.stepsLevel);
+                std::snprintf(line, sizeof(line), b.stepsOn ? (b.stepsSmart ? "+%.1f dB, smart" : "+%.1f dB") : "off",
+                              b.stepsLevel);
                 row("Footsteps", line);
                 std::snprintf(line, sizeof(line), "%+.1f dB", b.sound.bassDb);
                 row("Bass", line);

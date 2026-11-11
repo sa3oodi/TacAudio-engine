@@ -25,7 +25,8 @@ const char* const kHrtfHelp =
     "room:    --room neutral|balanced|spacious   --room-db <dB> (room level offset)\n"
     "dynamics: --dynamics off|light|medium|strong (tame loud sounds, lift quiet ones)\n"
     "          --punch 0-100 (how much of each shot's impact passes before taming; default 60)\n"
-    "          --footsteps 0-12 (dB of footstep clarity around 3.5 kHz, quiet sounds only)";
+    "          --footsteps 0-12 (dB of footstep clarity around 3.5 kHz, quiet sounds only)\n"
+    "          --footsteps-smart 0|1 (1 = short impacts only, not steady sounds; default 1)";
 
 std::string Args::get(const std::string& k, const std::string& def) const {
     auto it = opts.find(k);
@@ -207,6 +208,7 @@ BinauralConfig binauralFrom(const Args& a, float defaultGainDb, std::size_t defa
     c.dynamics = dynamicsPreset(a.get("--dynamics", defaultDynamics));
     c.dynamics.punch = static_cast<float>(a.num("--punch", c.dynamics.punch));
     c.dynamics.footstepDb = static_cast<float>(std::clamp(a.num("--footsteps", 0.0), 0.0, 12.0));
+    c.dynamics.footstepSmart = a.num("--footsteps-smart", 1.0) != 0.0;
     if (c.dynamics.footstepDb > 0)
         std::printf("footsteps: +%.1f dB clarity around %.0f Hz while quiet\n", c.dynamics.footstepDb,
                     c.dynamics.footstepHz);

@@ -4,7 +4,9 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <fstream>
 #include <sstream>
 
@@ -40,6 +42,18 @@ bool dllInstalled() {
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key.c_str(), 0, KEY_READ, &k) != ERROR_SUCCESS) return false;
     RegCloseKey(k);
     return true;
+}
+
+bool engineOutdated() {
+    const std::wstring key = std::wstring(L"SOFTWARE\\Classes\\CLSID\\") + kClsid + L"\\InprocServer32";
+    const std::filesystem::path installed = readString(key, nullptr);
+    const std::filesystem::path bundled = cli::exeDir() / L"TacAudioApo.dll";
+    std::error_code ec;
+    if (installed.empty() || !std::filesystem::exists(bundled, ec) || !std::filesystem::exists(installed, ec)) return false;
+    if (std::filesystem::file_size(installed, ec) != std::filesystem::file_size(bundled, ec)) return true;
+    std::ifstream a(installed, std::ios::binary), b(bundled, std::ios::binary);
+    std::istreambuf_iterator<char> ia(a), ib(b), end;
+    return !std::equal(ia, end, ib, end);
 }
 
 std::filesystem::path dataDir() {
