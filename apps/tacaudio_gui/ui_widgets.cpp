@@ -27,7 +27,12 @@ const char* Volume = "\xEE\x9D\xA7";     // U+E767
 const char* Settings = "\xEE\x9C\x93";   // U+E713
 const char* Setup = "\xEE\xA4\x8F";      // U+E90F (wrench)
 const char* Check = "\xEE\x9C\xBE";      // U+E73E (check mark)
+const char* Game = "\xEE\x9F\xBC";       // U+E7FC (game controller)
+const char* Search = "\xEE\x9C\xA1";     // U+E721
+const char* Add = "\xEE\x9C\x90";        // U+E710
 }  // namespace icon
+
+std::function<ImTextureID(const unsigned char* rgba, int w, int h)> createTexture;
 
 namespace {
 

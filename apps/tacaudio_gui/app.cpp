@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <numbers>
 
 #include <windows.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -75,6 +77,7 @@ AppSettings loadSettings() {
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
             else if (k == "setupDone") s.setupDone = v == "1";
+            else if (k == "autoProfiles") s.autoProfiles = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -123,12 +126,34 @@ void saveSettings(const AppSettings& s) {
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
       << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
-      << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\n";
+      << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0) << "\n";
 }
+
+namespace {
+SoundBundle bundleOf(const AppSettings& s) {
+    SoundBundle b;
+    b.sound = s.sound;
+    b.dynOn = s.dynOn;
+    b.dynPreset = s.dynPreset;
+    b.stepsOn = s.stepsOn;
+    b.stepsLevel = s.stepsLevel;
+    return b;
+}
+void applyBundle(AppSettings& s, const SoundBundle& b) {
+    s.sound = b.sound;
+    s.dynOn = b.dynOn;
+    s.dynPreset = b.dynPreset;
+    s.stepsOn = b.stepsOn;
+    s.stepsLevel = b.stepsLevel;
+}
+}  // namespace
 
 // ------------------------------------------------------------------ app
 App::App(bool previewRunning) : preview_(previewRunning) {
     cfg_ = loadSettings();
+    // Game profiles: start on Default (a game profile is picked once its game is in front).
+    profiles_ = loadProfiles(bundleOf(cfg_));
+    applyBundle(cfg_, profiles_.front().bundle);
     saved_ = cfg_;
     lastStatus_ = lastSave_ = std::chrono::steady_clock::now();
     refreshDevices();
@@ -199,13 +224,33 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         status_.latencyMs = 4.0;
         status_.source = "Game audio: 7.1 surround";
         status_.output = phones.name + " (Direct mode)";
+
+        // Profiles page: a sample library (no covers) with Call of Duty active.
+        for (const char* n : {"Apex Legends", "Battlefield 6", "Call of Duty", "Counter-Strike 2", "Escape from Tarkov",
+                              "Fortnite", "Hunt: Showdown 1896", "PUBG: Battlegrounds", "Rainbow Six Siege", "The Finals"}) {
+            GameEntry g;
+            g.name = n;
+            g.source = std::string(n) == "Fortnite" ? "Epic Games" : "Steam";
+            g.dirLower = std::string("c:\\games\\") + n + "\\";
+            library_.push_back(g);
+        }
+        libraryScanned_ = true;
+        selectedGame_ = library_[2].dirLower;
+        profiles_ = defaultProfiles(bundleOf(cfg_));
+        activeProfile_ = 1;
+        applyBundle(cfg_, profiles_[1].bundle);
     }
 }
 
 App::~App() {
     if (job_.valid()) job_.wait();
     session_.stop();
-    if (!preview_) saveSettings(cfg_);
+    if (!preview_) {
+        saveSettings(cfg_);
+        profiles_[static_cast<std::size_t>(activeProfile_)].bundle = bundleOf(cfg_);
+        saveProfiles(profiles_);
+    }
+    if (gameProcess_) CloseHandle(gameProcess_);
 }
 
 bool App::busy() const { return job_.valid() && job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready; }
@@ -348,6 +393,7 @@ void App::pollBackground() {
         lastJobWasStart_ = false;
     }
     pollSetupJobs();
+    pollProfiles();
     pollDirect();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
@@ -397,7 +443,8 @@ void App::pollBackground() {
                          cfg_.sound.volumeDb != saved_.sound.volumeDb || cfg_.sound.enabled3d != saved_.sound.enabled3d ||
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
                          cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
-                         cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone;
+                         cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
+                         cfg_.autoProfiles != saved_.autoProfiles;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -495,6 +542,7 @@ void App::frame() {
         case 2: pagePerformance(); break;
         case 3: pageSettings(); break;
         case kPageSetup: pageSetup(); break;
+        case kPageProfiles: pageProfiles(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -527,10 +575,10 @@ void App::sidebar() {
     ImGui::SetCursorScreenPos(ImVec2(lp.x - S(8), lp.y + S(66)));
     ImGui::Dummy(ImVec2(0, 0));
 
-    const char* glyphs[] = {icon::Audio, icon::Devices, icon::Setup, icon::Gauge, icon::Settings, icon::Info};
-    const char* labels[] = {"Sound", "Devices", "Setup", "Performance", "Settings", "About"};
-    const int pages[] = {0, 1, kPageSetup, 2, 3, 4};
-    for (int i = 0; i < 6; ++i)
+    const char* glyphs[] = {icon::Audio, icon::Game, icon::Devices, icon::Setup, icon::Gauge, icon::Settings, icon::Info};
+    const char* labels[] = {"Sound", "Profiles", "Devices", "Setup", "Performance", "Settings", "About"};
+    const int pages[] = {0, kPageProfiles, 1, kPageSetup, 2, 3, 4};
+    for (int i = 0; i < 7; ++i)
         if (navItem(glyphs[i], labels[i], page_ == pages[i])) page_ = pages[i];
 
     // Engine status at the bottom of the sidebar.
@@ -625,7 +673,10 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
 // ------------------------------------------------------------------ Sound page
 void App::pageSound() {
     const AppSettings def;
-    if (topBar("Sound", "Tune how the game sounds - every change applies live while you play.", true)) {
+    char sub[200];
+    std::snprintf(sub, sizeof(sub), "Profile: %s%s  -  every change applies live and is saved to this profile.",
+                  profiles_[static_cast<std::size_t>(activeProfile_)].name.c_str(), gameProcess_ ? " (game running)" : "");
+    if (topBar("Sound", sub, true)) {
         cfg_.sound.head = def.sound.head;
         cfg_.sound.room = def.sound.room;
         cfg_.sound.punch = def.sound.punch;
@@ -641,7 +692,6 @@ void App::pageSound() {
         requestRebuild();
     }
     const float gap = S(16);
-
     // --- Spatial audio
     beginCard("##spatial", "Spatial audio", &cfg_.sound.enabled3d, 0,
               "3D positioning through a measured head (HRTF). Turn off for a plain stereo mix to compare.");
@@ -1240,6 +1290,525 @@ void App::setupCable() {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
         ui::text("Finish steps 1 and 2 first.", col::Faint, 12.5f);
     }
+}
+
+// ------------------------------------------------------------------ Game profiles
+int App::findProfile(const std::string& exe, const std::string& path) const {
+    for (std::size_t i = 1; i < profiles_.size(); ++i)
+        if (profiles_[i].matches(exe, path)) return static_cast<int>(i);
+    return 0;
+}
+
+int App::profileForGame(const GameEntry& g) const {
+    for (std::size_t i = 1; i < profiles_.size(); ++i) {
+        const auto& d = profiles_[i].dirs;
+        if (!g.dirLower.empty() && std::find(d.begin(), d.end(), g.dirLower) != d.end()) return static_cast<int>(i);
+    }
+    for (std::size_t i = 1; i < profiles_.size(); ++i)
+        if (nameMatches(profiles_[i], g.name)) return static_cast<int>(i);
+    return 0;
+}
+
+void App::activateProfile(int index) {
+    if (index < 0 || index >= static_cast<int>(profiles_.size()) || index == activeProfile_) return;
+    profiles_[static_cast<std::size_t>(activeProfile_)].bundle = bundleOf(cfg_);
+    activeProfile_ = index;
+    applyBundle(cfg_, profiles_[static_cast<std::size_t>(index)].bundle);
+    session_.setVolumeDb(cfg_.sound.volumeDb);
+    session_.set3d(cfg_.sound.enabled3d);
+    requestRebuild();  // Direct mode: apo.ini follows cfg_ on the next poll
+    profilesDirty_ = true;
+}
+
+void App::pollProfiles() {
+    using namespace std::chrono;
+    // Library scan (Profiles page) and cover images.
+    if (libraryJob_.valid() && libraryJob_.wait_for(seconds(0)) == std::future_status::ready) {
+        try {
+            library_ = libraryJob_.get();
+        } catch (const std::exception&) {
+        }
+        libraryScanned_ = true;
+        // Built-in profiles found in the library by name also match by install folder from now on.
+        for (const auto& g : library_) {
+            if (g.dirLower.empty()) continue;
+            for (std::size_t i = 1; i < profiles_.size(); ++i) {
+                auto& d = profiles_[i].dirs;
+                if (nameMatches(profiles_[i], g.name) && std::find(d.begin(), d.end(), g.dirLower) == d.end()) {
+                    d.push_back(g.dirLower);
+                    profilesDirty_ = true;
+                }
+            }
+        }
+    }
+    if (coverJob_.valid() && coverJob_.wait_for(seconds(0)) == std::future_status::ready) {
+        auto [key, img] = coverJob_.get();
+        Cover& c = covers_[key];
+        if (img.w > 0 && ui::createTexture) c.tex = ui::createTexture(img.rgba.data(), img.w, img.h);
+        c.failed = !c.tex;
+    }
+    if (preview_) return;
+    if (!libraryScanned_ && !libraryJob_.valid() && page_ == kPageProfiles) libraryJob_ = std::async(std::launch::async, scanGameLibrary);
+
+    const auto now = steady_clock::now();
+    if (now - lastProfilePoll_ < seconds(1)) return;
+    lastProfilePoll_ = now;
+
+    // Edits on the Sound page belong to the active profile.
+    auto& active = profiles_[static_cast<std::size_t>(activeProfile_)];
+    if (!(active.bundle == bundleOf(cfg_))) {
+        active.bundle = bundleOf(cfg_);
+        profilesDirty_ = true;
+    }
+    if (profilesDirty_ && now - lastProfileSave_ > seconds(2)) {
+        saveProfiles(profiles_);
+        profilesDirty_ = false;
+        lastProfileSave_ = now;
+    }
+    if (!cfg_.autoProfiles) return;
+
+    // A game with a profile in front -> use its profile until that game exits.
+    std::uint32_t pid = 0;
+    std::string path;
+    const std::string exe = foregroundExe(&pid, &path);
+    const int match = exe.empty() ? 0 : findProfile(exe, path);
+    if (match > 0) {
+        if (match != activeProfile_ || !gameProcess_) {
+            if (gameProcess_) CloseHandle(gameProcess_);
+            gameProcess_ = OpenProcess(SYNCHRONIZE, FALSE, pid);
+            activateProfile(match);
+        }
+    } else if (gameProcess_ && WaitForSingleObject(gameProcess_, 0) == WAIT_OBJECT_0) {
+        CloseHandle(gameProcess_);
+        gameProcess_ = nullptr;
+        activateProfile(0);
+    }
+}
+
+void App::createProfileFor(const GameEntry& g, int startFrom) {
+    GameProfile p;
+    p.name = g.name;
+    p.bundle = profiles_[static_cast<std::size_t>(std::clamp(startFrom, 0, static_cast<int>(profiles_.size()) - 1))].bundle;
+    if (!g.dirLower.empty()) p.dirs.push_back(g.dirLower);
+    profiles_.push_back(std::move(p));
+    profilesDirty_ = true;
+}
+
+void App::addGameFromFile() {
+    wchar_t file[MAX_PATH] = {};
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = L"Games (*.exe)\0*.exe\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"Choose the game's program (.exe)";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&ofn)) return;
+    const fs::path p(file);
+    GameProfile g;
+    g.name = toUtf8(p.stem().wstring());
+    g.exes = parseExeList(toUtf8(p.filename().wstring()));
+    g.bundle = profiles_.front().bundle;
+    g.manual = true;
+    g.exePath = p.wstring();
+    profiles_.push_back(std::move(g));
+    profilesDirty_ = true;
+    selectedGame_ = "manual:" + profiles_.back().name;
+}
+
+ImTextureID App::coverFor(const GameEntry& g) {
+    const std::wstring& key = !g.cover.empty() ? g.cover : g.exe;
+    if (key.empty()) return 0;
+    auto it = covers_.find(key);
+    if (it != covers_.end()) return it->second.tex;
+    if (!coverJob_.valid()) {  // one image at a time, decoded off the UI thread
+        const bool isCover = !g.cover.empty();
+        coverJob_ = std::async(std::launch::async, [key, isCover] {
+            wasapi::ComScope com;
+            return std::make_pair(key, isCover ? loadImageFile(key, 300, 450) : loadExeIcon(key, 128));
+        });
+    }
+    return 0;
+}
+
+namespace {
+struct Tile {
+    GameEntry game;
+    int profile = 0;  // 0 = uses Default
+    std::string key;
+};
+
+ImU32 hueColor(const std::string& s, float v) {  // stable colour per name, for tiles without art
+    unsigned h = 2166136261u;
+    for (unsigned char c : s) h = (h ^ c) * 16777619u;
+    float r, g, b;
+    ImGui::ColorConvertHSVtoRGB(static_cast<float>(h % 360) / 360.0f, 0.55f, v, r, g, b);
+    return IM_COL32(static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255), 255);
+}
+
+std::string initials(const std::string& name) {
+    std::string out;
+    bool start = true;
+    for (unsigned char c : name) {
+        if ((std::isupper(c) || std::isdigit(c)) && start && out.size() < 2) out += static_cast<char>(c);
+        start = !std::isalnum(c);
+    }
+    return out.empty() ? "?" : out;
+}
+
+// Cover art (or a coloured card with the icon / initials), rounded, filling [p, p + sz].
+void drawCover(ImDrawList* dl, ImVec2 p, ImVec2 sz, const GameEntry& g, ImTextureID tex, float rounding) {
+    if (tex && !g.cover.empty()) {
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (g.coverIsWide) {  // landscape header art: crop the middle to portrait
+            const float keep = (sz.x / sz.y) / (460.0f / 215.0f);
+            uv0.x = 0.5f - keep * 0.5f;
+            uv1.x = 0.5f + keep * 0.5f;
+        }
+        dl->AddImageRounded(ImTextureRef(tex), p, p + sz, uv0, uv1, IM_COL32_WHITE, rounding);
+        return;
+    }
+    dl->AddRectFilled(p, p + sz, hueColor(g.name, 0.30f), rounding);
+    dl->AddRectFilled(p + ImVec2(0, sz.y * 0.5f), p + sz, withAlpha(IM_COL32(0, 0, 0, 255), 0.25f), rounding,
+                      ImDrawFlags_RoundCornersBottom);
+    if (tex) {
+        const float s = std::min(sz.x, sz.y) * 0.42f;
+        const ImVec2 c = p + sz * 0.5f - ImVec2(s, s) * 0.5f - ImVec2(0, sz.y * 0.06f);
+        dl->AddImage(ImTextureRef(tex), c, c + ImVec2(s, s));
+    } else {
+        const std::string in = initials(g.name);
+        const float fs = sz.x * 0.30f;
+        const ImVec2 ts = fonts.semibold->CalcTextSizeA(fs, FLT_MAX, 0, in.c_str());
+        dl->AddText(fonts.semibold, fs, p + (sz - ts) * 0.5f - ImVec2(0, sz.y * 0.06f), IM_COL32(255, 255, 255, 210), in.c_str());
+    }
+}
+
+std::string ellipsize(const std::string& s, float size, float maxW) {
+    if (fonts.semibold->CalcTextSizeA(size, FLT_MAX, 0, s.c_str()).x <= maxW) return s;
+    std::string t = s;
+    while (!t.empty() && fonts.semibold->CalcTextSizeA(size, FLT_MAX, 0, (t + "...").c_str()).x > maxW) t.pop_back();
+    return t + "...";
+}
+}  // namespace
+
+void App::pageProfiles() {
+    topBar("Profiles", "Each game gets its own sound. TacAudio switches automatically when the game is in front.");
+
+    // Tiles: library games, games added by hand, and built-in profiles not found in the library.
+    std::vector<Tile> tiles;
+    std::vector<bool> shown(profiles_.size(), false);
+    for (const auto& g : library_) {
+        Tile t{g, profileForGame(g), g.dirLower};
+        if (t.profile > 0) shown[static_cast<std::size_t>(t.profile)] = true;
+        tiles.push_back(std::move(t));
+    }
+    for (std::size_t i = 1; i < profiles_.size(); ++i) {
+        const auto& p = profiles_[i];
+        if (shown[i] && !p.manual) continue;
+        Tile t;
+        t.game.name = p.name;
+        t.game.source = p.manual ? "Added manually" : "Built-in profile";
+        t.game.exe = p.exePath;
+        t.profile = static_cast<int>(i);
+        t.key = "manual:" + p.name;
+        tiles.push_back(std::move(t));
+    }
+    auto inFilter = [&](const Tile& t, int f) {
+        switch (f) {
+            case 0: return t.game.source != "Built-in profile";
+            case 1: return t.profile > 0;
+            case 2: return t.game.source == "Steam";
+            case 3: return t.game.source == "Epic Games";
+            default: return t.game.source == "Added manually";
+        }
+    };
+    const char* filterNames[] = {"All games", "With profile", "Steam", "Epic Games", "Added manually"};
+    int counts[5] = {};
+    for (const auto& t : tiles)
+        for (int f = 0; f < 5; ++f) counts[f] += inFilter(t, f) ? 1 : 0;
+
+    const float sideW = S(210);
+    const float h = ImGui::GetContentRegionAvail().y;
+
+    // --- Left: active profile + filters
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, col::Card);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, S(12));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(14), S(14)));
+    ImGui::BeginChild("##libside", ImVec2(sideW, h), ImGuiChildFlags_AlwaysUseWindowPadding);
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        textUpper("active profile", col::Faint, 11.0f);
+        ImGui::Dummy(ImVec2(0, S(2)));
+        ImGui::SetNextItemWidth(-1);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(10), S(8)));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(8));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, col::Well);
+        ImGui::PushStyleColor(ImGuiCol_Button, col::Well);
+        if (ImGui::BeginCombo("##active", profiles_[static_cast<std::size_t>(activeProfile_)].name.c_str())) {
+            for (std::size_t i = 0; i < profiles_.size(); ++i)
+                if (ImGui::Selectable(profiles_[i].name.c_str(), static_cast<int>(i) == activeProfile_) && !preview_) {
+                    if (gameProcess_) {  // a manual choice wins until the next game starts
+                        CloseHandle(gameProcess_);
+                        gameProcess_ = nullptr;
+                    }
+                    activateProfile(static_cast<int>(i));
+                }
+            ImGui::EndCombo();
+        }
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+        ImGui::Dummy(ImVec2(0, S(4)));
+        const ImVec2 r = ImGui::GetCursorScreenPos();
+        toggle("##autoprof", &cfg_.autoProfiles);
+        dl->AddText(fonts.regular, S(13), r + ImVec2(S(54), S(4)), col::Dim, "Switch automatically");
+        ImGui::Dummy(ImVec2(0, S(10)));
+        dl->AddLine(ImGui::GetCursorScreenPos(), ImGui::GetCursorScreenPos() + ImVec2(sideW - S(28), 0), col::Line);
+        ImGui::Dummy(ImVec2(0, S(10)));
+
+        textUpper("games", col::Faint, 11.0f);
+        ImGui::Dummy(ImVec2(0, S(2)));
+        for (int f = 0; f < 5; ++f) {
+            ImGui::PushID(f);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const ImVec2 sz(sideW - S(28), S(34));
+            const bool clicked = ImGui::InvisibleButton("##f", sz);
+            const bool sel = libFilter_ == f;
+            if (sel || ImGui::IsItemHovered())
+                dl->AddRectFilled(p, p + sz, sel ? withAlpha(col::Accent, 0.16f) : col::CardHi, S(8));
+            dl->AddText(fonts.semibold, S(13.5f), p + ImVec2(S(12), S(8)), sel ? col::Text : col::Dim, filterNames[f]);
+            char n[16];
+            std::snprintf(n, sizeof(n), "%d", counts[f]);
+            const ImVec2 ns = fonts.semibold->CalcTextSizeA(S(12), FLT_MAX, 0, n);
+            const ImVec2 bp(p.x + sz.x - ns.x - S(22), p.y + S(7));
+            dl->AddRectFilled(bp, bp + ImVec2(ns.x + S(14), S(20)), col::Well, S(5));
+            dl->AddText(fonts.semibold, S(12), bp + ImVec2(S(7), S(3)), sel ? col::Accent : col::Faint, n);
+            if (clicked) libFilter_ = f;
+            ImGui::PopID();
+        }
+        ImGui::Dummy(ImVec2(0, S(10)));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, S(6)));
+        ImGui::PushFont(fonts.regular, 12.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, col::Faint);
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(
+            "Profiles are matched by the game's folder or program name. Edits on the Sound page are saved to the "
+            "active profile.");
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    ImGui::SameLine(0, S(16));
+
+    // --- Right: search + add, grid, detail
+    ImGui::BeginChild("##libmain", ImVec2(0, h));
+    {
+        const float avail = ImGui::GetContentRegionAvail().x;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 sp = ImGui::GetCursorScreenPos();
+        const float searchW = std::min(S(360), avail - S(320));
+        dl->AddRectFilled(sp, sp + ImVec2(searchW, S(36)), col::Card, S(18));
+        dl->AddText(fonts.regular, S(14), sp + ImVec2(S(14), S(10)), col::Faint, icon::Search);
+        ImGui::SetCursorScreenPos(sp + ImVec2(S(38), S(3)));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(4), S(7)));
+        ImGui::SetNextItemWidth(searchW - S(52));
+        ImGui::InputTextWithHint("##search", "Search games", search_, sizeof(search_));
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        ImGui::SetCursorScreenPos(ImVec2(sp.x + avail - S(150), sp.y + S(1)));
+        if (pillButton("+  Add game", col::Accent, IM_COL32(20, 14, 8, 255), S(150)) && !preview_) addGameFromFile();
+        if (ImGui::IsItemHovered()) tooltip("Pick a game's program (.exe) that is not in your Steam / Epic library");
+        ImGui::SetCursorScreenPos(ImVec2(sp.x + avail - S(150) - S(40), sp.y + S(4)));
+        if (iconButton("##rescan", icon::Refresh, "Scan Steam and Epic again", !libraryJob_.valid() && !preview_, 28)) {
+            libraryScanned_ = false;
+            library_.clear();
+        }
+        ImGui::SetCursorScreenPos(ImVec2(sp.x, sp.y + S(50)));
+
+        std::string q = search_;
+        std::transform(q.begin(), q.end(), q.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::vector<const Tile*> view;
+        for (const auto& t : tiles) {
+            if (!inFilter(t, libFilter_)) continue;
+            std::string n = t.game.name;
+            std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (!q.empty() && n.find(q) == std::string::npos) continue;
+            view.push_back(&t);
+        }
+        std::stable_sort(view.begin(), view.end(), [](const Tile* a, const Tile* b) { return (a->profile > 0) > (b->profile > 0); });
+
+        const Tile* sel = nullptr;
+        for (const auto* t : view)
+            if (t->key == selectedGame_) sel = t;
+        const float detailW = sel ? S(270) : 0.0f;
+        const float gridW = ImGui::GetContentRegionAvail().x - (sel ? detailW + S(16) : 0.0f);
+        const float gridH = ImGui::GetContentRegionAvail().y;
+
+        ImGui::BeginChild("##grid", ImVec2(gridW, gridH));
+        if (!libraryScanned_ && library_.empty()) {
+            spinner(S(9), col::Accent);
+            ImGui::SameLine(0, S(10));
+            ui::text("Looking for your games (Steam, Epic Games)...", col::Dim, 13.5f);
+        } else if (view.empty()) {
+            ui::text(q.empty() ? "No games here yet. Use \"+ Add game\" to add one." : "No game matches your search.", col::Dim,
+                     13.5f);
+        }
+        const float gap = S(14);
+        const float wAvail = ImGui::GetContentRegionAvail().x - S(4);
+        const int cols = std::max(1, static_cast<int>((wAvail + gap) / (S(118) + gap)));
+        const float tw = (wAvail - gap * static_cast<float>(cols - 1)) / static_cast<float>(cols);
+        const ImVec2 tsz(tw, tw * 1.5f);
+        ImDrawList* gdl = ImGui::GetWindowDrawList();
+        for (std::size_t i = 0; i < view.size(); ++i) {
+            const Tile& t = *view[i];
+            if (i % static_cast<std::size_t>(cols)) ImGui::SameLine(0, gap);
+            ImGui::PushID(t.key.c_str());
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const bool clicked = ImGui::InvisibleButton("##tile", ImVec2(tsz.x, tsz.y + S(30)));
+            const bool hov = ImGui::IsItemHovered();
+            if (ImGui::IsItemVisible()) {
+                const ImTextureID tex = coverFor(t.game);
+                drawCover(gdl, p, tsz, t.game, tex, S(10));
+                const bool isSel = t.key == selectedGame_;
+                const bool isActive = t.profile > 0 && t.profile == activeProfile_;
+                if (isSel || hov)
+                    gdl->AddRect(p - ImVec2(S(2), S(2)), p + tsz + ImVec2(S(2), S(2)), isSel ? col::Accent : withAlpha(col::Text, 0.5f),
+                                 S(11), 0, S(2));
+                if (t.profile > 0) {  // profile badge
+                    const char* b = isActive ? "ACTIVE" : "PROFILE";
+                    const ImVec2 bs = fonts.semibold->CalcTextSizeA(S(10.5f), FLT_MAX, 0, b);
+                    const ImVec2 bp = p + ImVec2(S(8), S(8));
+                    gdl->AddRectFilled(bp, bp + bs + ImVec2(S(12), S(6)), isActive ? col::Accent : IM_COL32(10, 12, 16, 210), S(5));
+                    gdl->AddText(fonts.semibold, S(10.5f), bp + ImVec2(S(6), S(3)), isActive ? IM_COL32(20, 14, 8, 255) : col::Text, b);
+                }
+                const std::string label = ellipsize(t.game.name, S(13), tsz.x);
+                gdl->AddText(fonts.semibold, S(13), ImVec2(p.x, p.y + tsz.y + S(8)), hov || isSel ? col::Text : col::Dim,
+                             label.c_str());
+            }
+            if (clicked) selectedGame_ = selectedGame_ == t.key ? std::string() : t.key;
+            ImGui::PopID();
+        }
+        ImGui::Dummy(ImVec2(0, S(10)));
+        ImGui::EndChild();
+
+        if (sel) {
+            ImGui::SameLine(0, S(16));
+            const Tile t = *sel;  // copy: the detail panel may change profiles_
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, col::Card);
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, S(12));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(16), S(16)));
+            ImGui::BeginChild("##detail", ImVec2(detailW, gridH), ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImDrawList* ddl = ImGui::GetWindowDrawList();
+            const float cw = ImGui::GetContentRegionAvail().x;
+            const ImVec2 csz(std::min(cw, S(140)), std::min(cw, S(140)) * 1.5f);
+            const ImVec2 cp = ImGui::GetCursorScreenPos() + ImVec2((cw - csz.x) * 0.5f, 0);
+            drawCover(ddl, cp, csz, t.game, coverFor(t.game), S(10));
+            ImGui::Dummy(ImVec2(cw, csz.y + S(10)));
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::PushFont(fonts.semibold, 18.0f);
+            ImGui::TextUnformatted(t.game.name.c_str());
+            ImGui::PopFont();
+            ImGui::PopTextWrapPos();
+            chip(t.game.source.c_str(), col::Faint);
+            ImGui::Dummy(ImVec2(0, S(4)));
+
+            if (t.profile > 0) {
+                GameProfile& p = profiles_[static_cast<std::size_t>(t.profile)];
+                const bool isActive = t.profile == activeProfile_;
+                chip(isActive ? "Profile active now" : "Has its own profile", isActive ? col::Green : col::Accent);
+                const SoundBundle& b = isActive ? bundleOf(cfg_) : p.bundle;
+                char line[160];
+                auto row = [&](const char* k, const char* v) {
+                    ui::text(k, col::Faint, 12.5f);
+                    ImGui::SameLine(S(96));
+                    ui::text(v, col::Text, 12.5f, true);
+                };
+                std::snprintf(line, sizeof(line), "%s%s", b.sound.enabled3d ? "on, head " : "off", b.sound.enabled3d ? b.sound.head.c_str() : "");
+                row("3D", line);
+                row("Room", b.sound.room.c_str());
+                std::snprintf(line, sizeof(line), "%s, punch %.0f", b.dynOn ? b.dynPreset.c_str() : "off", b.sound.punch);
+                row("Dynamics", line);
+                std::snprintf(line, sizeof(line), b.stepsOn ? "+%.1f dB" : "off", b.stepsLevel);
+                row("Footsteps", line);
+                std::snprintf(line, sizeof(line), "%+.1f dB", b.sound.bassDb);
+                row("Bass", line);
+                ImGui::Dummy(ImVec2(0, S(6)));
+                if (actionButton("Edit sound", true, true, cw) && !preview_) {
+                    if (gameProcess_) {
+                        CloseHandle(gameProcess_);
+                        gameProcess_ = nullptr;
+                    }
+                    activateProfile(t.profile);
+                    page_ = 0;
+                }
+                ImGui::Dummy(ImVec2(0, S(2)));
+                if (!isActive && actionButton("Use now", false, true, cw) && !preview_) {
+                    if (gameProcess_) {
+                        CloseHandle(gameProcess_);
+                        gameProcess_ = nullptr;
+                    }
+                    activateProfile(t.profile);
+                }
+                ImGui::Dummy(ImVec2(0, S(6)));
+                ui::text("Also match programs", col::Faint, 12.0f);
+                char exes[256];
+                std::snprintf(exes, sizeof(exes), "%s", p.exeList().c_str());
+                ImGui::SetNextItemWidth(-1);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, col::Well);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(8), S(6)));
+                if (ImGui::InputTextWithHint("##exes", "e.g. game.exe, game_dx12.exe", exes, sizeof(exes)) && !preview_) {
+                    p.exes = parseExeList(exes);
+                    profilesDirty_ = true;
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+                ImGui::Dummy(ImVec2(0, S(6)));
+                if (actionButton("Delete profile", false, true, cw) && !preview_) {
+                    if (t.profile == activeProfile_) activateProfile(0);
+                    else if (t.profile < activeProfile_) --activeProfile_;
+                    profiles_.erase(profiles_.begin() + t.profile);
+                    profilesDirty_ = true;
+                    if (t.key.rfind("manual:", 0) == 0) selectedGame_.clear();
+                }
+            } else {
+                para("No profile yet - this game uses your Default sound.", col::Dim, 13.0f);
+                ImGui::Dummy(ImVec2(0, S(4)));
+                ui::text("Start from", col::Faint, 12.0f);
+                createFrom_ = std::clamp(createFrom_, 0, static_cast<int>(profiles_.size()) - 1);
+                ImGui::SetNextItemWidth(-1);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, col::Well);
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(S(8), S(6)));
+                if (ImGui::BeginCombo("##from", profiles_[static_cast<std::size_t>(createFrom_)].name.c_str())) {
+                    for (std::size_t i = 0; i < profiles_.size(); ++i)
+                        if (ImGui::Selectable(profiles_[i].name.c_str(), static_cast<int>(i) == createFrom_)) createFrom_ = static_cast<int>(i);
+                    ImGui::EndCombo();
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor();
+                ImGui::Dummy(ImVec2(0, S(6)));
+                if (actionButton("Create profile", true, true, cw) && !preview_) createProfileFor(t.game, createFrom_);
+            }
+            if (!t.game.dir.empty()) {
+                ImGui::Dummy(ImVec2(0, S(8)));
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::PushFont(fonts.regular, 11.5f);
+                ImGui::PushStyleColor(ImGuiCol_Text, col::Faint);
+                ImGui::TextUnformatted(toUtf8(t.game.dir).c_str());
+                ImGui::PopStyleColor();
+                ImGui::PopFont();
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::EndChild();
 }
 
 // ------------------------------------------------------------------ About page

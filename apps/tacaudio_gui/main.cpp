@@ -387,6 +387,24 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     ui::setup(dpi);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
+    ui::createTexture = [](const unsigned char* rgba, int w, int h) -> ImTextureID {
+        D3D11_TEXTURE2D_DESC d{};
+        d.Width = static_cast<UINT>(w);
+        d.Height = static_cast<UINT>(h);
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.Usage = D3D11_USAGE_DEFAULT;
+        d.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init{rgba, static_cast<UINT>(w) * 4, 0};
+        ID3D11Texture2D* tex = nullptr;
+        if (FAILED(g_device->CreateTexture2D(&d, &init, &tex))) return 0;
+        ID3D11ShaderResourceView* view = nullptr;
+        g_device->CreateShaderResourceView(tex, nullptr, &view);
+        tex->Release();
+        return reinterpret_cast<ImTextureID>(view);
+    };
 
     int result = 0;
     {
@@ -395,6 +413,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
         app.setPage(page);
         if (!smoke) app.autoStartIfEnabled();
         int frames = 0;
+        char sf[16] = {};  // TACAUDIO_SMOKE_FRAMES: render longer (e.g. to let the game library load)
+        GetEnvironmentVariableA("TACAUDIO_SMOKE_FRAMES", sf, sizeof(sf));
+        const int smokeFrames = sf[0] ? std::max(2, atoi(sf)) : 40;
         bool done = false;
         auto lastTip = std::chrono::steady_clock::now();
         while (!done) {
@@ -417,7 +438,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
                 app.tick();
                 continue;
             }
-            if (smoke && ++frames > 40) break;  // enough frames for animations to settle
+            if (smoke && ++frames > smokeFrames) break;  // enough frames for animations to settle
             if (g_resizeW) {
                 cleanupRenderTarget();
                 g_swapChain->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
@@ -433,7 +454,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
             g_context->ClearRenderTargetView(g_rtv, clear);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            if (smoke && frames == 40) saveScreenshot(fs::temp_directory_path() / "tacaudio_gui_smoke.bmp");
+            if (smoke && frames == smokeFrames) saveScreenshot(fs::temp_directory_path() / "tacaudio_gui_smoke.bmp");
             g_swapChain->Present(1, 0);
         }
         g_app = nullptr;

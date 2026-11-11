@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <deque>
+#include <map>
 #include <future>
 #include <optional>
 #include <string>
@@ -11,6 +12,9 @@
 
 #include "apo_control.h"
 #include "cable_check.h"
+#include "game_library.h"
+#include "imgui.h"
+#include "profiles.h"
 #include "session.h"
 
 namespace tac {
@@ -29,6 +33,7 @@ struct AppSettings {
     bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
     bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
     bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)
+    bool autoProfiles = true;       // switch the game profile when a game comes to the front
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
@@ -66,6 +71,7 @@ public:
     static constexpr const char* kHotkeyPower = "Ctrl + Alt + F10";
     static constexpr const char* kHotkey3d = "Ctrl + Alt + F9";
     static constexpr int kPageSetup = 5;
+    static constexpr int kPageProfiles = 6;
 
 private:
     void sidebar();
@@ -77,6 +83,16 @@ private:
     void pageSettings();
     void pageAbout();
     void pageSetup();
+    void pageProfiles();
+
+    // Game profiles.
+    void pollProfiles();
+    void activateProfile(int index);
+    int profileForGame(const GameEntry& g) const;
+    int findProfile(const std::string& exe, const std::string& path) const;
+    void createProfileFor(const GameEntry& g, int startFrom);
+    void addGameFromFile();
+    ImTextureID coverFor(const GameEntry& g);
     void setupDirect();   // Setup page, Direct mode cards
     void setupCable();    // Setup page, VB-CABLE mode cards
     void finishSetup(bool turnOn);
@@ -135,6 +151,26 @@ private:
     std::string lastApoIni_;
     std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
     std::optional<apoctl::Status> apoStatus_;
+
+    // Game profiles and the game library (Profiles page).
+    std::vector<GameProfile> profiles_;
+    int activeProfile_ = 0;
+    bool profilesDirty_ = false;
+    std::chrono::steady_clock::time_point lastProfilePoll_{}, lastProfileSave_{};
+    void* gameProcess_ = nullptr;          // HANDLE of the game that selected the active profile
+    std::vector<GameEntry> library_;
+    std::future<std::vector<GameEntry>> libraryJob_;
+    bool libraryScanned_ = false;
+    int libFilter_ = 0;                    // 0 all, 1 with profile, 2 Steam, 3 Epic, 4 added manually
+    char search_[96] = {};
+    std::string selectedGame_;             // key of the selected tile ("" = none)
+    int createFrom_ = 0;
+    struct Cover {
+        ImTextureID tex = 0;
+        bool failed = false;
+    };
+    std::map<std::wstring, Cover> covers_;
+    std::future<std::pair<std::wstring, Image>> coverJob_;
 };
 
 }  // namespace tac

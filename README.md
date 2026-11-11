@@ -50,6 +50,7 @@ icon and hotkeys.
 | 🏠 **Room presets** | Neutral (dry, most precise), Balanced (small room), Spacious |
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB |
+| 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
@@ -104,6 +105,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 | Page | What it's for |
 |---|---|
 | **Sound** | Head, room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
+| **Profiles** | Your games as a library of covers. Give a game its own profile (start from Default or another profile); TacAudio switches to it while that game runs and back to Default when it closes. Edits on the Sound page go to the active profile |
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
@@ -117,6 +119,9 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 Closing the window keeps TacAudio running in the tray; right-click the tray icon to exit. In Direct
 mode the engine keeps your last settings even when the app is closed.
 
+<p align="center">
+  <img src="docs/images/screenshot-profiles.png" width="860" alt="Profiles page: game library with per-game sound">
+</p>
 <p align="center">
   <img src="docs/images/screenshot-performance.png" width="420" alt="Performance page">
   <img src="docs/images/screenshot-devices.png" width="420" alt="Devices page">
@@ -233,7 +238,8 @@ src/platform/      WASAPI capture / loopback / render (shared, low-latency, excl
 src/sofa/          SOFA HRTF import (libmysofa)
 apps/apo/          TacAudioApo.dll (the Direct-mode engine inside Windows audio) + tacapo-setup.exe
 apps/common/       CLI helpers, AudioSession, cable check, apo_control (app <-> engine)
-apps/tacaudio_gui/ TacAudio.exe: Win32 + Direct3D 11 + Dear ImGui app (ui_widgets = UI kit)
+apps/tacaudio_gui/ TacAudio.exe: Win32 + Direct3D 11 + Dear ImGui app (ui_widgets = UI kit,
+                   profiles = game profiles, game_library = Steam / Epic scan + covers)
 apps/tacaudio/     tacaudio-cli.exe        apps/tacrender/  tacrender.exe
 tests/             unit tests (each DSP block against a reference; engine vs. offline; drift, jitter)
 tools/             make_icon.py (app icon), fetch_sadie.py (head data)
@@ -242,7 +248,6 @@ installer/         Inno Setup script        scripts/  build_installer.ps1
 
 ## Roadmap
 
-- Game profiles (per-game settings, auto-switch when a game starts)
 - Headphone correction EQ per model
 - Upmix for stereo-only games
 - Code-signed installer and auto-update

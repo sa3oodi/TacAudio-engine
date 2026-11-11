@@ -58,7 +58,13 @@ extern const char* Volume;
 extern const char* Settings;
 extern const char* Setup;
 extern const char* Check;
+extern const char* Game;
+extern const char* Search;
+extern const char* Add;
 }  // namespace icon
+
+// Set by the window host: uploads an RGBA8 image (top-down) and returns its texture (0 = failed).
+extern std::function<ImTextureID(const unsigned char* rgba, int w, int h)> createTexture;
 
 // ------------------------------------------------------------------ text helpers
 void text(const char* s, ImU32 color = col::Text, float size = 15.0f, bool bold = false);
