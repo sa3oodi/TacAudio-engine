@@ -1,5 +1,5 @@
 #pragma once
-// "Find your head": a short listening test that plays noise bursts from 8 directions through
+// "Find your head": a short listening test that plays footsteps from 8 directions through
 // each installed head (HRTF) and records where the listener heard them. The head with the
 // smallest direction error (and fewest front/back mix-ups) suits this listener best.
 

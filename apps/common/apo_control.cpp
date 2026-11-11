@@ -101,7 +101,11 @@ std::optional<Status> readStatus() {
             else if (k == "outR") s.outRDb = std::stof(v);
             else if (k == "dynMin") s.dynMinDb = std::stof(v);
             else if (k == "dynMax") s.dynMaxDb = std::stof(v);
-            else if (k == "in") {
+            else if (k == "steps") {
+                std::istringstream is(v);
+                for (std::size_t c = 0; c < 8 && is >> s.steps[c]; ++c) {
+                }
+            } else if (k == "in") {
                 std::istringstream is(v);
                 s.inDb.fill(-120.0f);
                 for (std::size_t c = 0; c < 8 && is >> s.inDb[c]; ++c) {

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "core/binaural_renderer.h"
+#include "core/footstep_detector.h"
 #include "core/layout.h"
 #include "core/limiter.h"
 
@@ -63,6 +64,8 @@ public:
     // Since the last call (any thread): output peaks per ear (linear) and the strongest dynamics
     // reduction / lift in dB.
     void takeStats(float& peakL, float& peakR, float& dynMinDb, float& dynMaxDb) noexcept;
+    // Footstep activity per input channel (0..1) since the last call; up to 8 channels.
+    void takeFootsteps(float* out8) noexcept;
 
     static constexpr std::size_t kBlock = 128;  // 2.7 ms at 48 kHz (same as the app)
 
@@ -90,6 +93,8 @@ private:
     float mixOn_ = 1.0f;                        // smoothed power (1 = TacAudio, 0 = plain downmix)
     int statBlocks_ = 0;
     Limiter limiter_;
+    std::vector<FootstepDetector> steps_;
+    std::atomic<float> stepAct_[8] = {};
 
     // Hand-over slots between threads.
     std::atomic<BinauralRenderer*> pending_{nullptr};  // worker -> audio

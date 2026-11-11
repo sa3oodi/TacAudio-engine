@@ -32,6 +32,8 @@ add_library(tac_core STATIC
     src/core/room.cpp
     src/core/dynamics.cpp
     src/core/headphone_eq.cpp
+    src/core/footstep_detector.cpp
+    src/core/footstep_synth.cpp
     src/engine/engine.cpp
 )
 target_include_directories(tac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

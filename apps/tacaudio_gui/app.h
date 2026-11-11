@@ -46,8 +46,9 @@ struct AppSettings {
     bool autoProfiles = true;       // switch the game profile when a game comes to the front
     bool checkUpdates = true;       // ask GitHub for a newer release (at launch, then twice a day)
     bool overlayOn = false;         // accessibility: sound direction ring on screen
-    float overlaySize = 140.0f;     // ring radius (px)
+    float overlaySize = 90.0f;      // ring radius (px)
     float overlayOpacity = 80.0f;   // %
+    int overlayPos = 1;             // 0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 centre
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;

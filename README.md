@@ -47,13 +47,13 @@ icon and hotkeys.
 |---|---|
 | 🎯 **Direct mode** | Engine built into Windows audio on your headphones: no virtual cable, ~4 ms delay, keeps working with the app closed |
 | 🎧 **Measured heads** | SADIE II KEMAR and Neumann KU100 dummy heads included (+18 human heads optional), diffuse-field equalised so they sound neutral |
-| 👂 **Find your head** | 2-minute listening test: noise bursts from 8 directions through each head, you click where you heard them, TacAudio picks the head with the most accurate directions and fewest front/back mix-ups |
+| 👂 **Find your head** | 2-minute listening test: enemy footsteps (boots on gravel, like in a game) walk from 8 directions through each head, you click where you heard them, TacAudio picks the head with the most accurate directions and fewest front/back mix-ups |
 | 🏠 **Room presets** | Neutral (dry, most precise), Balanced (small room), Spacious |
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB. *Smart* mode lifts only short impacts (steps, landings, reloads) and leaves steady sounds in the same band (rain, wind, engines) alone |
 | 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
 | 🎚️ **Headphone EQ** | Import a parametric correction for your headphone model (Equalizer APO / AutoEq format, file or paste); applied after 3D, in both modes |
-| ♿ **Sound direction ring** | Accessibility option (off by default): a click-through ring in the middle of the screen glows towards game sounds, from the 7.1 channel levels. Check your game's / tournament's rules before using it competitively |
+| ♿ **Footstep ring** | Accessibility option (off by default): a small click-through ring in any corner of the main screen (or the centre) glows towards enemy footsteps. A footstep detector on each 7.1 channel ignores gunfire, explosions, vehicles and rain. Check your game's / tournament's rules before using it competitively |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
@@ -112,7 +112,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode), and the headphone EQ (*Find your headphones* opens AutoEq, download the "Equalizer APO" parametric file, *Import file*) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
-| **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys, accessibility (sound direction ring), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
+| **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys, accessibility (footstep ring: position, size, opacity), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
 
 | Hotkey | Action |
 |---|---|
@@ -189,6 +189,7 @@ lock-free ring buffer with drift compensation and an adaptive buffer, then exclu
 | CPU | ~2 % of one core |
 | Gunfire vs. footsteps (battle test scene) | 31 dB &rarr; 21 dB (medium) &rarr; 16 dB (strong) |
 | Gunshot crack kept with punch 60 | 32 dB vs. 34 dB without dynamics (24 dB at punch 0) |
+| Footstep detector (ring): footsteps / rain / gunshot / explosion / silence | 0.90 / 0.03 / 0.00 / 0.00 / 0.00 |
 | Smart footsteps: steady band noise / footstep bursts | classic +4.5 / +4.3 dB, smart **+0.0** / +4.0 dB |
 | Raw MIT KEMAR average at 2 - 3 kHz | +17.8 dB &rarr; flat within ±1.5 dB after equalisation |
 

@@ -111,6 +111,7 @@ namespace {
 // Written about 20x per second to %ProgramData%\TacAudio\apo_status.ini (read by the app's level
 // meters and the sound direction overlay).
 std::atomic<float> g_inPeak[8] = {};
+std::atomic<float> g_steps[8] = {};  // footstep activity per channel, 0..1
 std::atomic<float> g_outL{0.0f}, g_outR{0.0f}, g_dynMin{0.0f}, g_dynMax{0.0f};
 std::atomic<int> g_streams{0};
 std::atomic<unsigned> g_inChannels{0};
@@ -138,6 +139,8 @@ void writeStatusIfDue() {
     char b[512];
     int len = std::snprintf(b, sizeof(b), "time=%llu\nstreams=%d\nchannels=%u\nin=", now, g_streams.load(), ch);
     for (unsigned c = 0; c < ch; ++c) len += std::snprintf(b + len, sizeof(b) - len, "%s%.1f", c ? " " : "", toDb(g_inPeak[c].exchange(0.0f)));
+    len += std::snprintf(b + len, sizeof(b) - len, "\nsteps=");
+    for (unsigned c = 0; c < ch; ++c) len += std::snprintf(b + len, sizeof(b) - len, "%s%.2f", c ? " " : "", g_steps[c].exchange(0.0f));
     len += std::snprintf(b + len, sizeof(b) - len, "\noutL=%.1f\noutR=%.1f\ndynMin=%.1f\ndynMax=%.1f\n", toDb(g_outL.exchange(0.0f)),
                          toDb(g_outR.exchange(0.0f)), g_dynMin.exchange(0.0f), g_dynMax.exchange(0.0f));
     const std::filesystem::path tmp = dataPath(L"apo_status.tmp"), dst = dataPath(L"apo_status.ini");
@@ -530,6 +533,9 @@ private:
                 if (engine_) {  // feed the shared status the app reads
                     float l, r, mn, mx;
                     engine_->takeStats(l, r, mn, mx);
+                    float st[8];
+                    engine_->takeFootsteps(st);
+                    for (int c = 0; c < 8; ++c) raiseAtomic(g_steps[c], st[c]);
                     raiseAtomic(g_outL, l);
                     raiseAtomic(g_outR, r);
                     lowerAtomic(g_dynMin, mn);

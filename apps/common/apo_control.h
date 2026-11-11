@@ -29,6 +29,7 @@ struct Status {
     int streams = 0;               // game / app streams currently processed
     unsigned channels = 0;         // input channels (8 = 7.1)
     std::array<float, 8> inDb{};   // input peak per channel since the last status (dBFS)
+    std::array<float, 8> steps{};  // footstep activity per channel (0..1)
     float outLDb = -120, outRDb = -120;
     float dynMinDb = 0, dynMaxDb = 0;
 };

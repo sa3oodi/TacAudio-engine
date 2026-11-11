@@ -29,6 +29,7 @@ Engine::Engine(const SpeakerLayout& inputLayout, const HrirSet& hrirs, const Eng
       baseTargetFrames_(targetFrames_),
       blockSeconds_(static_cast<double>(config.binaural.blockSize) / config.sampleRate) {
     for (auto& p : planar_) planarPtrs_.push_back(p.data());
+    steps_.assign(std::min<std::size_t>(planar_.size(), kMaxMeterChannels), FootstepDetector(config.sampleRate));
     rendererLatency_.store(renderer_->latencySamples());
 
     // Stereo downmix for the 3D-off (bypass) position: fronts straight, centre/LFE to both,
@@ -138,6 +139,11 @@ void Engine::renderBlock() noexcept {
         for (float x : planar_[c]) pk = std::max(pk, std::fabs(x));
         float cur = inPeak_[c].load(std::memory_order_relaxed);
         while (pk > cur && !inPeak_[c].compare_exchange_weak(cur, pk, std::memory_order_relaxed)) {
+        }
+        steps_[c].process(planar_[c].data(), B_);
+        const float act = steps_[c].takeMax();
+        cur = stepAct_[c].load(std::memory_order_relaxed);
+        while (act > cur && !stepAct_[c].compare_exchange_weak(cur, act, std::memory_order_relaxed)) {
         }
     }
 

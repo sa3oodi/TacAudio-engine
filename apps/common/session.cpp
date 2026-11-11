@@ -190,12 +190,13 @@ void AudioSession::meters(float& left, float& right) {
     if (engine_) engine_->takeMeters(left, right);
 }
 
-std::size_t AudioSession::inputMeters(float* peaks, float* azimuth, bool* lfe) {
+std::size_t AudioSession::inputMeters(float* peaks, float* azimuth, bool* lfe, float* steps) {
     std::lock_guard<std::mutex> l(m_);
     if (!engine_) return 0;
     const SpeakerLayout& lay = engine_->inputLayout();
     const std::size_t n = std::min<std::size_t>(lay.size(), Engine::kMaxMeterChannels);
     engine_->takeInputPeaks(peaks, n);
+    if (steps) engine_->takeFootsteps(steps, n);
     for (std::size_t c = 0; c < n; ++c) {
         azimuth[c] = lay.speakers[c].azimuthDeg;
         lfe[c] = lay.speakers[c].isLfe;

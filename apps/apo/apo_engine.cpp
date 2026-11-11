@@ -96,6 +96,7 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     }
 
     inBlock_.assign(inCh_, std::vector<float>(kBlock, 0.0f));
+    steps_.assign(std::min<std::uint32_t>(inCh_, 8), FootstepDetector(sampleRate));
     for (auto& b : inBlock_) inPtrs_.push_back(b.data());
     qL_.assign(2 * kBlock + 1, 0.0f);
     qR_.assign(2 * kBlock + 1, 0.0f);
@@ -179,7 +180,20 @@ void ApoEngine::worker() {
     }
 }
 
+void ApoEngine::takeFootsteps(float* out8) noexcept {
+    for (std::size_t c = 0; c < 8; ++c) out8[c] = stepAct_[c].exchange(0.0f);
+}
+
 void ApoEngine::renderBlock() noexcept {
+    // Footstep detection on the game's channels (for the app's direction ring).
+    for (std::size_t c = 0; c < steps_.size(); ++c) {
+        steps_[c].process(inBlock_[c].data(), kBlock);
+        const float a = steps_[c].takeMax();
+        float cur = stepAct_[c].load(std::memory_order_relaxed);
+        while (a > cur && !stepAct_[c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
+        }
+    }
+
     // Pick up a new renderer (only once the previous old one has been collected).
     if (!next_ && !retired_.load(std::memory_order_acquire)) {
         if (BinauralRenderer* p = pending_.exchange(nullptr, std::memory_order_acq_rel)) {

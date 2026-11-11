@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "core/binaural_renderer.h"
+#include "core/footstep_detector.h"
 #include "core/limiter.h"
 #include "core/ring_buffer.h"
 #include "core/varispeed.h"
@@ -90,6 +91,10 @@ public:
     void takeInputPeaks(float* out, std::size_t n) noexcept {
         for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = inPeak_[c].exchange(0.0f);
     }
+    // Footstep activity per channel (0..1, core/footstep_detector.h), strongest since the last call.
+    void takeFootsteps(float* out, std::size_t n) noexcept {
+        for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = stepAct_[c].exchange(0.0f);
+    }
 
     // ---- producer thread
     void pushInput(const float* interleaved, std::size_t frames) noexcept;
@@ -151,6 +156,8 @@ private:
     std::atomic<float> limMin_{1.0f}, dynMin_{0.0f}, dynMax_{0.0f}, peakL_{0.0f}, peakR_{0.0f};
     std::atomic<bool> runningFlag_{false};
     std::atomic<float> inPeak_[kMaxMeterChannels] = {};
+    std::atomic<float> stepAct_[kMaxMeterChannels] = {};
+    std::vector<FootstepDetector> steps_;
 };
 
 }  // namespace tac

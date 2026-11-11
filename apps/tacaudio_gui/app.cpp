@@ -113,8 +113,9 @@ AppSettings loadSettings() {
             else if (k == "autoProfiles") s.autoProfiles = v == "1";
             else if (k == "checkUpdates") s.checkUpdates = v == "1";
             else if (k == "overlayOn") s.overlayOn = v == "1";
-            else if (k == "overlaySize") s.overlaySize = std::clamp(std::stof(v), 60.0f, 300.0f);
+            else if (k == "overlaySize") s.overlaySize = std::clamp(std::stof(v), 40.0f, 300.0f);
             else if (k == "overlayOpacity") s.overlayOpacity = std::clamp(std::stof(v), 10.0f, 100.0f);
+            else if (k == "overlayPos") s.overlayPos = std::clamp(std::stoi(v), 0, 4);
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -166,7 +167,7 @@ void saveSettings(const AppSettings& s) {
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
       << "\neqName=" << s.eqName << "\noverlayOn=" << (s.overlayOn ? 1 : 0) << "\noverlaySize=" << s.overlaySize
-      << "\noverlayOpacity=" << s.overlayOpacity << "\n";
+      << "\noverlayOpacity=" << s.overlayOpacity << "\noverlayPos=" << s.overlayPos << "\n";
 }
 
 namespace {
@@ -285,17 +286,17 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         selectedGame_ = library_[2].dirLower;
         profiles_ = defaultProfiles(bundleOf(cfg_));
         activeProfile_ = 1;
-        {  // Settings page: the direction ring preview, a sound behind-left
+        {  // Settings page: the footstep ring preview, an enemy walking behind-left
             const SpeakerLayout lay = layoutFromChannelMask(0x63F);
             float pk[8], az[8];
             bool lf[8];
-            const float db[8] = {-30, -42, -38, -70, -12, -34, -20, -40};
+            const float stepDemo[8] = {0, 0, 0, 0, 0.9f, 0, 0.45f, 0};
             for (int c = 0; c < 8; ++c) {
-                pk[c] = std::pow(10.0f, db[c] / 20.0f);
+                pk[c] = stepDemo[c];
                 az[c] = lay.speakers[static_cast<std::size_t>(c)].azimuthDeg;
                 lf[c] = lay.speakers[static_cast<std::size_t>(c)].isLfe;
             }
-            for (int i = 0; i < 20; ++i) dirField_.update(pk, az, lf, 8, 0.1f);
+            for (int i = 0; i < 20; ++i) dirField_.updateWeights(pk, az, lf, 8, 0.1f);
             wchar_t ov[MAX_PATH] = {};  // dev: TACAUDIO_PREVIEW_OVERLAY=<file.bmp> saves the ring bitmap
             if (GetEnvironmentVariableW(L"TACAUDIO_PREVIEW_OVERLAY", ov, MAX_PATH)) overlay_.saveBitmap(dirField_, 140, 0.8f, ov);
         }
@@ -512,7 +513,8 @@ void App::pollBackground() {
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
                          cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
                          cfg_.eqName != saved_.eqName || cfg_.overlayOn != saved_.overlayOn ||
-                         cfg_.overlaySize != saved_.overlaySize || cfg_.overlayOpacity != saved_.overlayOpacity;
+                         cfg_.overlaySize != saved_.overlaySize || cfg_.overlayOpacity != saved_.overlayOpacity ||
+                         cfg_.overlayPos != saved_.overlayPos;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -1204,18 +1206,23 @@ void App::pageSettings() {
     ImGui::Dummy(ImVec2(0, S(6)));
 
     beginCard("##access", "Accessibility", nullptr, 0,
-              "For players who can't hear well: shows where game sounds come from, from the level of each 7.1 channel. "
+              "For players who can't hear well: shows where enemy footsteps come from. A footstep detector on each 7.1 "
+              "channel picks out short, crunchy, moderate impacts and ignores gunfire, explosions, vehicles and rain. "
               "It only reads the audio TacAudio already processes - nothing inside the game.");
     const ImVec2 cardTop = ImGui::GetCursorScreenPos();
     const float previewW = S(150);
     const float rowW = ImGui::GetContentRegionAvail().x - previewW - S(20);
     ImGui::BeginGroup();
     ImGui::PushItemWidth(rowW);
-    ImGui::BeginChild("##accrows", ImVec2(rowW, S(170)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-    toggleRow("Direction ring", &cfg_.overlayOn,
-              "A ring in the middle of the screen glows towards sounds (while game sound plays).", def.overlayOn);
+    ImGui::BeginChild("##accrows", ImVec2(rowW, S(215)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps - gunfire and explosions are ignored.",
+              def.overlayOn);
     ImGui::BeginDisabled(!cfg_.overlayOn);
-    sliderRow("Size", &cfg_.overlaySize, 60.0f, 300.0f, "%.0f px", def.overlaySize, "Radius of the ring.");
+    {
+        static const std::vector<std::string> kPos = {"Top left", "Top right", "Bottom left", "Bottom right", "Center"};
+        segmentedRow("Position", &cfg_.overlayPos, kPos, def.overlayPos, "Where the ring sits on your main screen.");
+    }
+    sliderRow("Size", &cfg_.overlaySize, 40.0f, 300.0f, "%.0f px", def.overlaySize, "Radius of the ring.");
     sliderRow("Opacity", &cfg_.overlayOpacity, 10.0f, 100.0f, "%.0f %%", def.overlayOpacity, "How visible the ring is.");
     ImGui::EndDisabled();
     para("Works over windowed and borderless-fullscreen games (not exclusive fullscreen). Some games and tournaments "
@@ -1541,7 +1548,8 @@ void App::pollOverlay() {
     if (dt < 0.03f) return;
     lastOverlay_ = now;
 
-    float peaks[8] = {}, az[8] = {};
+    // Footsteps only: each channel's footstep detector (in the engine), not its loudness.
+    float peaks[8] = {}, steps[8] = {}, az[8] = {};
     bool lfe[8] = {};
     std::size_t n = 0;
     if (direct_) {
@@ -1550,21 +1558,22 @@ void App::pollOverlay() {
             const SpeakerLayout lay = layoutFromChannelMask(defaultChannelMask(static_cast<std::uint32_t>(n)));
             n = std::min(n, lay.size());
             for (std::size_t c = 0; c < n; ++c) {
-                peaks[c] = std::pow(10.0f, st->inDb[c] / 20.0f);
+                steps[c] = st->steps[c];
                 az[c] = lay.speakers[c].azimuthDeg;
                 lfe[c] = lay.speakers[c].isLfe;
             }
         }
     } else {
-        n = session_.inputMeters(peaks, az, lfe);
+        n = session_.inputMeters(peaks, az, lfe, steps);
     }
-    if (n > 0) dirField_.update(peaks, az, lfe, n, std::min(dt, 0.2f));
+    if (n > 0) dirField_.updateWeights(steps, az, lfe, n, std::min(dt, 0.2f));
     else dirField_.decay(std::min(dt, 0.2f));
 
     if (dirField_.peak() > 0.05f) overlayActive_ = now;
     // Shown while game sound is playing; hidden after 2 s of quiet (no ring on an idle desktop).
     if (cfg_.overlayOn && now - overlayActive_ < seconds(2))
-        overlay_.show(dirField_, static_cast<int>(cfg_.overlaySize * ui::dpi), cfg_.overlayOpacity / 100.0f);
+        overlay_.show(dirField_, static_cast<int>(cfg_.overlaySize * ui::dpi), cfg_.overlayOpacity / 100.0f,
+                      static_cast<SoundOverlay::Position>(cfg_.overlayPos));
     else
         overlay_.hide();
 }
@@ -1653,8 +1662,8 @@ void App::pageHeadTest() {
         const auto heads = cli::listHeads();
         const std::size_t n = std::min<std::size_t>(heads.size(), 5);
         std::snprintf(b, sizeof(b),
-                      "You hear %zu short bursts of noise, one at a time, each from one of 8 directions around you. Click "
-                      "where you heard it. The sounds are made with %zu different heads; the head that gives you the most "
+                      "You hear %zu short walks - enemy footsteps, like in a game - one at a time, each from one of 8 "
+                      "directions around you. Click where you heard them. The sounds are made with %zu different heads; the head that gives you the most "
                       "accurate directions - and the fewest front/back mix-ups - is the best one for your ears.\n\n"
                       "Use the headphones you play with, at a comfortable volume, in a quiet room. Don't guess too long: "
                       "your first impression is what counts.",

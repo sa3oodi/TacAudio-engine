@@ -12,6 +12,8 @@
 #include "core/binaural_renderer.h"
 #include "core/biquad.h"
 #include "core/dynamics.h"
+#include "core/footstep_detector.h"
+#include "core/footstep_synth.h"
 #include "core/headphone_eq.h"
 #include "core/convolver.h"
 #include "core/fft.h"
@@ -1004,6 +1006,66 @@ void testHeadphoneEq() {
     CHECK_NEAR(level(one) - level(HeadphoneEq{}), 4.0, 0.1);
 }
 
+void testFootstepDetector() {
+    // Footsteps at game level light it up; steady noise, gunfire, explosions and silence do not.
+    const double fs = 48000;
+    Rng rng;
+    auto run = [&](const std::vector<float>& x, std::size_t settle) {  // max activity after `settle` samples
+        FootstepDetector d(fs);
+        d.process(x.data(), settle);
+        d.takeMax();
+        d.process(x.data() + settle, x.size() - settle);
+        return d.takeMax();
+    };
+    auto atDb = [](std::vector<float> v, double peakDb) {
+        float pk = 0;
+        for (float s : v) pk = std::max(pk, std::abs(s));
+        const float g = static_cast<float>(std::pow(10.0, peakDb / 20.0)) / std::max(pk, 1e-9f);
+        for (auto& s : v) s *= g;
+        return v;
+    };
+    // Footsteps, peaking at -26 dBFS (a nearby enemy in a game mix), after 0.5 s of quiet ambience.
+    std::vector<float> steps = synthFootsteps(fs, 4, 0.42, 7);
+    std::vector<float> walk(24000 + steps.size());
+    for (std::size_t i = 0; i < walk.size(); ++i) walk[i] = 0.0005f * rng.next();
+    steps = atDb(steps, -26.0);
+    for (std::size_t i = 0; i < steps.size(); ++i) walk[24000 + i] += steps[i];
+    // Steady band noise (rain / wind) at a similar level.
+    std::vector<float> rain(96000);
+    {
+        Biquad bp = Biquad::bandpass(fs, 3500.0, 0.7);
+        for (auto& s : rain) s = bp.process(rng.next());
+        rain = atDb(rain, -26.0);
+    }
+    // Gunshot: broadband crack + boom, loud.
+    std::vector<float> shot(48000, 0.0f);
+    {
+        Biquad hp = Biquad::highpass(fs, 900.0), lp = Biquad::lowpass(fs, 140.0);
+        for (std::size_t i = 24000; i < shot.size(); ++i) {
+            const double t = static_cast<double>(i - 24000) / fs;
+            const float x = rng.next();
+            shot[i] = hp.process(x) * static_cast<float>(1.6 * std::exp(-t / 0.012)) + lp.process(x) * static_cast<float>(3.0 * std::exp(-t / 0.09));
+        }
+        shot = atDb(shot, -1.0);
+    }
+    // Explosion rumble at a moderate level (far away): mostly low frequencies.
+    std::vector<float> boom(48000, 0.0f);
+    {
+        Biquad lp = Biquad::lowpass(fs, 180.0, 1.0);
+        for (std::size_t i = 24000; i < boom.size(); ++i)
+            boom[i] = lp.process(rng.next()) * static_cast<float>(std::exp(-static_cast<double>(i - 24000) / fs / 0.4));
+        boom = atDb(boom, -24.0);
+    }
+    const float aWalk = run(walk, 0), aRain = run(rain, 48000), aShot = run(shot, 0), aBoom = run(boom, 0),
+                aQuiet = run(std::vector<float>(48000, 0.0f), 0);
+    std::printf("    footsteps %.2f | rain %.2f | gunshot %.2f | explosion %.2f | silence %.2f\n", aWalk, aRain, aShot, aBoom, aQuiet);
+    CHECK(aWalk > 0.6f);
+    CHECK(aRain < 0.15f);
+    CHECK(aShot < 0.15f);
+    CHECK(aBoom < 0.2f);
+    CHECK(aQuiet < 0.01f);
+}
+
 void testSmartFootsteps() {
     // Smart mode: short impacts in the footstep band are lifted, a steady sound in the same band
     // (rain, engine hum) is not.
@@ -1116,6 +1178,7 @@ int main() {
         {"M3 dynamics: tame loud, lift quiet, independent channels", testDynamics},
         {"M3 footstep boost: quiet band only", testFootstepBoost},
         {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
+        {"footstep detector: steps yes; rain, gunfire, explosions no", testFootstepDetector},
         {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE

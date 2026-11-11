@@ -81,7 +81,8 @@ public:
     // Input peak per source channel since the last call (linear) with each channel's direction
     // (azimuth, + = right) and whether it is the LFE. Up to 8 channels; returns the count (0 when
     // stopped).
-    std::size_t inputMeters(float* peaks8, float* azimuth8, bool* lfe8);
+    // steps8 (optional): footstep activity per channel, 0..1.
+    std::size_t inputMeters(float* peaks8, float* azimuth8, bool* lfe8, float* steps8 = nullptr);
 
 private:
     std::shared_ptr<const HrirSet> loadHead(const std::string& name);  // cached

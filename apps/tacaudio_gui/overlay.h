@@ -1,6 +1,6 @@
 #pragma once
-// Sound direction overlay (accessibility): a ring in the middle of the screen that glows towards
-// where game sounds come from, computed from the level of each 7.1 channel. Click-through,
+// Sound direction overlay (accessibility): a ring in a corner of the main screen (or its centre)
+// that glows towards enemy footsteps, from the footstep detector on each 7.1 channel. Click-through,
 // always on top, never takes focus. Visible over windowed / borderless games (not over
 // exclusive fullscreen).
 //
@@ -20,6 +20,8 @@ public:
     // levels: linear peaks; azimuth: degrees (+ = right); lfe channels are ignored. dt: seconds
     // since the last update (for smoothing).
     void update(const float* levels, const float* azimuth, const bool* lfe, std::size_t n, float dt);
+    // weights: footstep activity per channel (0..1, core/footstep_detector.h).
+    void updateWeights(const float* weights, const float* azimuth, const bool* lfe, std::size_t n, float dt);
     void decay(float dt);  // no data: fade out
     float at(int deg) const { return v_[static_cast<std::size_t>(((deg % kBins) + kBins) % kBins)]; }
     float peak() const;
@@ -35,8 +37,10 @@ public:
     SoundOverlay(const SoundOverlay&) = delete;
     SoundOverlay& operator=(const SoundOverlay&) = delete;
 
-    // radius in px (ring), opacity 0..1. Creates the window on first call; call from the UI thread.
-    void show(const DirectionField& field, int radius, float opacity);
+    enum class Position { TopLeft, TopRight, BottomLeft, BottomRight, Center };
+    // radius in px (ring), opacity 0..1, on the main screen. Creates the window on first call; call
+    // from the UI thread.
+    void show(const DirectionField& field, int radius, float opacity, Position where);
     void hide();
     // Dev check: draws the ring like show() and saves it as a 32-bit BMP, without showing a window.
     void saveBitmap(const DirectionField& field, int radius, float opacity, const wchar_t* path);

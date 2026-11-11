@@ -6,6 +6,7 @@
 #include <random>
 #include <stdexcept>
 
+#include "core/footstep_synth.h"
 #include "core/hrtf.h"
 #include "platform/wasapi.h"
 
@@ -13,36 +14,6 @@ namespace tac {
 
 namespace {
 constexpr double kRate = 48000.0;
-
-// Three 150 ms bursts of pink noise (10 ms fades, 100 ms gaps): broadband, like footsteps, with
-// enough onsets to localise.
-std::vector<float> makeStimulus(std::mt19937& rng) {
-    const auto burst = static_cast<std::size_t>(0.150 * kRate), gap = static_cast<std::size_t>(0.100 * kRate),
-               fade = static_cast<std::size_t>(0.010 * kRate);
-    std::vector<float> s(3 * burst + 2 * gap, 0.0f);
-    std::uniform_real_distribution<float> u(-1.0f, 1.0f);
-    float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;  // Paul Kellet's pink filter
-    for (int k = 0; k < 3; ++k) {
-        const std::size_t start = static_cast<std::size_t>(k) * (burst + gap);
-        for (std::size_t i = 0; i < burst; ++i) {
-            const float w = u(rng);
-            b0 = 0.99886f * b0 + w * 0.0555179f;
-            b1 = 0.99332f * b1 + w * 0.0750759f;
-            b2 = 0.96900f * b2 + w * 0.1538520f;
-            b3 = 0.86650f * b3 + w * 0.3104856f;
-            b4 = 0.55000f * b4 + w * 0.5329522f;
-            b5 = -0.7616f * b5 - w * 0.0168980f;
-            const float pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362f) * 0.11f;
-            b6 = w * 0.115926f;
-            float env = 1.0f;
-            if (i < fade) env = 0.5f - 0.5f * std::cos(std::numbers::pi_v<float> * static_cast<float>(i) / fade);
-            else if (i >= burst - fade)
-                env = 0.5f - 0.5f * std::cos(std::numbers::pi_v<float> * static_cast<float>(burst - i) / fade);
-            s[start + i] = pink * env;
-        }
-    }
-    return s;
-}
 
 std::vector<float> convolve(const std::vector<float>& x, const std::vector<float>& h) {
     std::vector<float> y(x.size() + h.size() - 1, 0.0f);
@@ -74,7 +45,10 @@ void HeadTest::prepare(const std::vector<cli::HeadInfo>& heads, const std::strin
     if (heads.empty()) throw std::runtime_error("no heads installed");
     heads_ = heads;
     std::mt19937 rng(seed);
-    const std::vector<float> stim = makeStimulus(rng);
+    // Game-style footsteps (3 steps at walking pace): a different walk for each direction, the same
+    // walks for every head so the heads are compared fairly.
+    std::vector<std::vector<float>> walk(kDirs);
+    for (int d = 0; d < kDirs; ++d) walk[static_cast<std::size_t>(d)] = synthFootsteps(kRate, 3, 0.42, rng(), 0.5f);
 
     // Every head x every direction, in random order (so no head is always heard first).
     trials_.clear();
@@ -83,6 +57,9 @@ void HeadTest::prepare(const std::vector<cli::HeadInfo>& heads, const std::strin
     std::shuffle(trials_.begin(), trials_.end(), rng);
 
     std::vector<std::vector<std::vector<float>>> rendered(heads_.size());  // [head][dir] interleaved
+    std::vector<std::pair<std::vector<std::vector<float>>, std::vector<std::vector<float>>>> raw(heads_.size());
+    std::vector<float> gains(heads_.size(), 1.0f);
+    float peakAll = 0.0f;
     for (std::size_t h = 0; h < heads_.size(); ++h) {
         cli::Args a;
         a.opts["--head"] = heads_[h].name;
@@ -90,13 +67,25 @@ void HeadTest::prepare(const std::vector<cli::HeadInfo>& heads, const std::strin
         std::vector<std::vector<float>> l(kDirs), r(kDirs);
         for (int d = 0; d < kDirs; ++d) {
             const auto& m = set.nearest(kAzimuth[d], 0.0f);
-            l[static_cast<std::size_t>(d)] = convolve(stim, m.left);
-            r[static_cast<std::size_t>(d)] = convolve(stim, m.right);
+            l[static_cast<std::size_t>(d)] = convolve(walk[static_cast<std::size_t>(d)], m.left);
+            r[static_cast<std::size_t>(d)] = convolve(walk[static_cast<std::size_t>(d)], m.right);
         }
-        // Same loudness for every head (measured from the front), level differences between
+        // Same loudness for every head (averaged over the directions); level differences between
         // directions are kept: they are part of the cue.
-        const double front = 0.5 * (rms(l[0]) + rms(r[0]));
-        const float g = front > 0 ? static_cast<float>(std::pow(10.0, -24.0 / 20.0) / front) : 1.0f;
+        double avg = 0;
+        for (int d = 0; d < kDirs; ++d) avg += 0.5 * (rms(l[static_cast<std::size_t>(d)]) + rms(r[static_cast<std::size_t>(d)])) / kDirs;
+        gains[h] = avg > 0 ? static_cast<float>(std::pow(10.0, -32.0 / 20.0) / avg) : 1.0f;
+        for (int d = 0; d < kDirs; ++d)
+            for (const auto* ch : {&l[static_cast<std::size_t>(d)], &r[static_cast<std::size_t>(d)]})
+                for (float v : *ch) peakAll = std::max(peakAll, std::abs(v) * gains[h]);
+        raw[h] = {std::move(l), std::move(r)};
+    }
+    // Footsteps are sharp: if any sound would peak above -3 dBFS, turn everything down together.
+    const float guard = peakAll > 0.7f ? 0.7f / peakAll : 1.0f;
+    for (std::size_t h = 0; h < heads_.size(); ++h) {
+        const auto& l = raw[h].first;
+        const auto& r = raw[h].second;
+        const float g = gains[h] * guard;
         rendered[h].resize(kDirs);
         for (int d = 0; d < kDirs; ++d) {
             const auto& L = l[static_cast<std::size_t>(d)];

@@ -38,6 +38,24 @@ void DirectionField::update(const float* levels, const float* azimuth, const boo
     }
 }
 
+void DirectionField::updateWeights(const float* weights, const float* azimuth, const bool* lfe, std::size_t n, float dt) {
+    std::array<float, kBins> target{};
+    for (std::size_t c = 0; c < n && c < 8; ++c) {
+        const float w = std::clamp(weights[c], 0.0f, 1.0f);
+        if (lfe[c] || w <= 0.0f) continue;
+        for (int d = 0; d < kBins; ++d) {
+            const float diff = (static_cast<float>(d) - azimuth[c]) * std::numbers::pi_v<float> / 180.0f;
+            target[static_cast<std::size_t>(d)] += w * std::pow(std::max(0.0f, std::cos(diff)), 10.0f);
+        }
+    }
+    const float att = 1.0f - std::exp(-dt / 0.04f), rel = 1.0f - std::exp(-dt / 0.5f);
+    for (int d = 0; d < kBins; ++d) {
+        float& v = v_[static_cast<std::size_t>(d)];
+        const float t = std::min(1.0f, target[static_cast<std::size_t>(d)]);
+        v += (t - v) * (t > v ? att : rel);
+    }
+}
+
 void DirectionField::decay(float dt) {
     const float rel = 1.0f - std::exp(-dt / 0.35f);
     for (auto& v : v_) v -= v * rel;
@@ -146,15 +164,24 @@ void SoundOverlay::saveBitmap(const DirectionField& field, int radius, float opa
     fclose(f);
 }
 
-void SoundOverlay::show(const DirectionField& field, int radius, float opacity) {
+void SoundOverlay::show(const DirectionField& field, int radius, float opacity, Position where) {
     const int size = draw(field, radius, opacity);
     if (!size) return;
 
-    // Centre of the monitor the user is looking at (where the foreground window is).
-    HMONITOR mon = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+    // Main screen; corners keep a small margin from the edges.
+    HMONITOR mon = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(mon, &mi);
-    POINT pos{(mi.rcMonitor.left + mi.rcMonitor.right) / 2 - size / 2, (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2 - size / 2};
+    const RECT& m = mi.rcMonitor;
+    const int margin = std::max(16, size / 10);
+    POINT pos{(m.left + m.right) / 2 - size / 2, (m.top + m.bottom) / 2 - size / 2};
+    switch (where) {
+        case Position::TopLeft: pos = {m.left + margin, m.top + margin}; break;
+        case Position::TopRight: pos = {m.right - size - margin, m.top + margin}; break;
+        case Position::BottomLeft: pos = {m.left + margin, m.bottom - size - margin}; break;
+        case Position::BottomRight: pos = {m.right - size - margin, m.bottom - size - margin}; break;
+        case Position::Center: break;
+    }
     SIZE sz{size, size};
     POINT src{0, 0};
     BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
