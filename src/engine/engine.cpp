@@ -143,15 +143,23 @@ void Engine::renderBlock() noexcept {
     if (!haveInput)
         for (auto& p : planar_) std::fill(p.begin(), p.end(), 0.0f);
     steps_.process(planarPtrs_.data(), B_);  // footsteps, for the app's direction ring
+    {
+        const FootstepTracker::Stats d = steps_.takeStats();
+        const int v[5] = {d.impacts, d.own, d.single, d.balanced, d.strict};
+        for (int i = 0; i < 5; ++i)
+            if (v[i]) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
+    }
     for (std::size_t c = 0; c < planar_.size() && c < kMaxMeterChannels; ++c) {  // input meters (per speaker)
         float pk = 0.0f;
         for (float x : planar_[c]) pk = std::max(pk, std::fabs(x));
         float cur = inPeak_[c].load(std::memory_order_relaxed);
         while (pk > cur && !inPeak_[c].compare_exchange_weak(cur, pk, std::memory_order_relaxed)) {
         }
-        const float act = steps_.takeMax(c);
-        cur = stepAct_[c].load(std::memory_order_relaxed);
-        while (act > cur && !stepAct_[c].compare_exchange_weak(cur, act, std::memory_order_relaxed)) {
+        for (int l = 0; l < FootstepTracker::kLevels; ++l) {
+            const float act = steps_.takeMax(c, l);
+            cur = stepAct_[l][c].load(std::memory_order_relaxed);
+            while (act > cur && !stepAct_[l][c].compare_exchange_weak(cur, act, std::memory_order_relaxed)) {
+            }
         }
     }
 

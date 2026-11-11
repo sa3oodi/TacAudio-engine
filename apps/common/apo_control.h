@@ -29,7 +29,10 @@ struct Status {
     int streams = 0;               // game / app streams currently processed
     unsigned channels = 0;         // input channels (8 = 7.1)
     std::array<float, 8> inDb{};   // input peak per channel since the last status (dBFS)
-    std::array<float, 8> steps{};  // footstep activity per channel (0..1)
+    std::array<float, 8> steps{};  // footstep activity per channel (0..1), balanced
+    std::array<std::array<float, 8>, 3> stepsLevel{};  // per detection level (sensitive, balanced, strict)
+    bool hasLevels = false;                             // false: an older engine (steps only)
+    std::array<long long, 5> stepStat{};  // impacts, own, single, balanced, strict (since audiodg started)
     float outLDb = -120, outRDb = -120;
     float dynMinDb = 0, dynMaxDb = 0;
 };

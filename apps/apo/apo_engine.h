@@ -65,7 +65,8 @@ public:
     // reduction / lift in dB.
     void takeStats(float& peakL, float& peakR, float& dynMinDb, float& dynMaxDb) noexcept;
     // Footstep activity per input channel (0..1) since the last call; up to 8 channels.
-    void takeFootsteps(float* out8) noexcept;
+    void takeFootsteps(float* out8, int level) noexcept;  // level: 0 sensitive, 1 balanced, 2 strict
+    void takeStepStats(int* out5) noexcept;               // impacts, own, single, balanced, strict
 
     static constexpr std::size_t kBlock = 128;  // 2.7 ms at 48 kHz (same as the app)
 
@@ -94,7 +95,8 @@ private:
     int statBlocks_ = 0;
     Limiter limiter_;
     FootstepTracker steps_;
-    std::atomic<float> stepAct_[8] = {};
+    std::atomic<float> stepAct_[FootstepTracker::kLevels][8] = {};
+    std::atomic<int> stepStat_[5] = {};
 
     // Hand-over slots between threads.
     std::atomic<BinauralRenderer*> pending_{nullptr};  // worker -> audio

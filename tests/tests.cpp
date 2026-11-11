@@ -1033,14 +1033,15 @@ void testFootstepDetector() {
     // A scene: quiet ambience on every speaker plus `sound` on the given speakers (gain each).
     // Returns the strongest activity on any speaker, and on `want`.
     struct Out {
-        float any = 0, want = 0;
-        int steps = 0, impacts = 0;
+        float any[3] = {}, want[3] = {};  // per level: sensitive, balanced, strict
+        FootstepTracker::Stats st;
     };
+    float ambience = 0.0005f;  // background noise on every speaker
     auto run = [&](const std::vector<float>& sound, std::vector<std::pair<std::size_t, float>> on, std::size_t want) {
         const std::size_t lead = 24000, n = lead + sound.size() + 24000;
         std::vector<std::vector<float>> x(lay.size(), std::vector<float>(n));
         for (auto& c : x)
-            for (auto& v : c) v = 0.0005f * rng.next();
+            for (auto& v : c) v = ambience * rng.next();
         for (auto [c, g] : on)
             for (std::size_t i = 0; i < sound.size(); ++i) x[c][lead + i] += g * sound[i];
         FootstepTracker t(fs, az, lfe);
@@ -1051,14 +1052,14 @@ void testFootstepDetector() {
             std::vector<const float*> p = ptr;
             for (auto& q : p) q += off;
             t.process(p.data(), std::min<std::size_t>(480, n - off));
-            for (std::size_t c = 0; c < lay.size(); ++c) {
-                const float a = t.takeMax(c);
-                o.any = std::max(o.any, a);
-                if (c == want) o.want = std::max(o.want, a);
-            }
+            for (std::size_t c = 0; c < lay.size(); ++c)
+                for (int l = 0; l < 3; ++l) {
+                    const float a = t.takeMax(c, l);
+                    o.any[l] = std::max(o.any[l], a);
+                    if (c == want) o.want[l] = std::max(o.want[l], a);
+                }
         }
-        o.steps = t.steps();
-        o.impacts = t.impacts();
+        o.st = t.totals();
         return o;
     };
     const std::size_t FL = ch("FL"), FR = ch("FR"), FC = ch("FC"), SL = ch("SL"), SR = ch("SR"), BL = ch("BL");
@@ -1100,6 +1101,9 @@ void testFootstepDetector() {
     farShot = atDb(farShot, -26.0);
     for (int k = 0; k < 13; ++k) shotAt(0.05 + 0.1 * k, autoFire);  // 600 rounds / minute, far away
     autoFire = atDb(autoFire, -26.0);
+    std::vector<float> slowFire(96000, 0.0f);  // 450 rounds / minute
+    for (int k = 0; k < 11; ++k) shotAt(0.05 + 0.1333 * k, slowFire);
+    slowFire = atDb(slowFire, -26.0);
     shotAt(0.01, loudShot);
     loudShot = atDb(loudShot, -1.0);
     std::vector<float> rain(96000);  // steady band noise
@@ -1117,30 +1121,59 @@ void testFootstepDetector() {
     }
     const Out oReload = run(reload, {{SR, 1.0f}}, SR), oOwnReload = run(ownReload, {{FL, 0.8f}, {FR, 0.8f}}, FL),
               oOwnSteps = run(walk, {{FL, 0.7f}, {FR, 0.7f}, {FC, 0.5f}}, FC), oFarShot = run(farShot, {{SR, 1.0f}}, SR),
-              oAuto = run(autoFire, {{SR, 1.0f}}, SR), oLoud = run(loudShot, {{SR, 1.0f}}, SR),
-              oRain = run(rain, {{SR, 1.0f}}, SR), oBoom = run(boom, {{SL, 1.0f}}, SL),
-              oQuiet = run(std::vector<float>(48000, 0.0f), {}, SL);
-    std::printf("    walk %.2f (%d steps) | run %.2f (%d) | reload %.2f | own reload %.2f | own steps %.2f | far shot %.2f | "
-                "auto fire %.2f | loud shot %.2f | rain %.2f | explosion %.2f | silence %.2f\n",
-                oWalk.want, oWalk.steps, oRun.want, oRun.steps, oReload.any, oOwnReload.any, oOwnSteps.any, oFarShot.any,
-                oAuto.any, oLoud.any, oRain.any, oBoom.any, oQuiet.any);
-    std::printf("    impacts heard: reload %d, own reload %d, own steps %d, auto fire %d\n", oReload.impacts,
-                oOwnReload.impacts, oOwnSteps.impacts, oAuto.impacts);
-    CHECK(oReload.impacts >= 3);  // heard, and rejected for their rhythm / direction
-    CHECK(oOwnReload.impacts >= 3);
-    CHECK(oOwnSteps.impacts >= 3);
-    CHECK(oWalk.want > 0.6f);
-    CHECK(oWalk.steps >= 2);
-    CHECK(oRun.want > 0.6f);
-    CHECK(oReload.any < 0.05f);
-    CHECK(oOwnReload.any < 0.05f);
-    CHECK(oOwnSteps.any < 0.05f);
-    CHECK(oFarShot.any < 0.05f);
-    CHECK(oAuto.any < 0.05f);
-    CHECK(oLoud.any < 0.05f);
-    CHECK(oRain.any < 0.05f);
-    CHECK(oBoom.any < 0.05f);
-    CHECK(oQuiet.any < 0.01f);
+              oAuto = run(autoFire, {{SR, 1.0f}}, SR), oSlowFire = run(slowFire, {{BL, 1.0f}}, BL),
+              oLoud = run(loudShot, {{SR, 1.0f}}, SR), oRain = run(rain, {{SR, 1.0f}}, SR),
+              oBoom = run(boom, {{SL, 1.0f}}, SL), oQuiet = run(std::vector<float>(48000, 0.0f), {}, SL);
+    // A distant enemy in a busy mix: quieter steps over 10x louder ambience.
+    ambience = 0.005f;
+    const Out oBusy = run(atDb(synthFootsteps(fs, 6, 0.45, 23), -32.0), {{BL, 1.0f}, {SL, 0.5f}}, BL);
+    ambience = 0.0005f;
+    auto row = [](const char* name, const Out& o, bool want) {
+        const float* v = want ? o.want : o.any;
+        std::printf("    %-11s sensitive %.2f  balanced %.2f  strict %.2f  (%d impacts, %d own)\n", name, v[0], v[1], v[2],
+                    o.st.impacts, o.st.own);
+    };
+    row("walk", oWalk, true);
+    row("run", oRun, true);
+    row("busy mix", oBusy, true);
+    row("reload", oReload, false);
+    row("own reload", oOwnReload, false);
+    row("own steps", oOwnSteps, false);
+    row("far shot", oFarShot, false);
+    row("auto fire", oAuto, false);
+    row("450 rpm", oSlowFire, false);
+    row("loud shot", oLoud, false);
+    row("rain", oRain, false);
+    row("explosion", oBoom, false);
+    row("silence", oQuiet, false);
+    // Enemy steps: every level, on the right speaker.
+    for (int l = 0; l < 3; ++l) {
+        CHECK(oWalk.want[l] > 0.6f);
+        CHECK(oRun.want[l] > 0.6f);
+    }
+    CHECK(oBusy.want[0] > 0.6f);
+    CHECK(oBusy.want[1] > 0.6f);
+    // Your own sounds: heard, ignored at every level.
+    CHECK(oOwnReload.st.impacts >= 3);
+    CHECK(oOwnSteps.st.impacts >= 3);
+    for (int l = 0; l < 3; ++l) {
+        CHECK(oOwnReload.any[l] < 0.05f);
+        CHECK(oOwnSteps.any[l] < 0.05f);
+        CHECK(oLoud.any[l] < 0.05f);
+        CHECK(oBoom.any[l] < 0.05f);
+        CHECK(oQuiet.any[l] < 0.01f);
+    }
+    // Single shot: not at Balanced / Strict. Reloads and automatic fire: not at Strict.
+    CHECK(oReload.st.impacts >= 3);
+    CHECK(oFarShot.any[1] < 0.05f);
+    CHECK(oRain.any[1] < 0.05f);  // the rain starting is one impact (Sensitive), then nothing
+    CHECK(oRain.any[2] < 0.05f);
+    CHECK(oFarShot.any[2] < 0.05f);
+    CHECK(oReload.any[2] < 0.05f);
+    CHECK(oAuto.any[1] < 0.05f);
+    CHECK(oSlowFire.any[1] < 0.05f);
+    CHECK(oAuto.any[2] < 0.05f);
+    CHECK(oSlowFire.any[2] < 0.05f);
 }
 
 void testSmartFootsteps() {

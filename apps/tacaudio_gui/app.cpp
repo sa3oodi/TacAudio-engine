@@ -116,6 +116,7 @@ AppSettings loadSettings() {
             else if (k == "overlaySize") s.overlaySize = std::clamp(std::stof(v), 40.0f, 300.0f);
             else if (k == "overlayOpacity") s.overlayOpacity = std::clamp(std::stof(v), 10.0f, 100.0f);
             else if (k == "overlayPos") s.overlayPos = std::clamp(std::stoi(v), 0, 4);
+            else if (k == "overlayLevel") s.overlayLevel = std::clamp(std::stoi(v), 0, 2);
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -167,7 +168,8 @@ void saveSettings(const AppSettings& s) {
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
       << "\neqName=" << s.eqName << "\noverlayOn=" << (s.overlayOn ? 1 : 0) << "\noverlaySize=" << s.overlaySize
-      << "\noverlayOpacity=" << s.overlayOpacity << "\noverlayPos=" << s.overlayPos << "\n";
+      << "\noverlayOpacity=" << s.overlayOpacity << "\noverlayPos=" << s.overlayPos
+      << "\noverlayLevel=" << s.overlayLevel << "\n";
 }
 
 namespace {
@@ -514,7 +516,7 @@ void App::pollBackground() {
                          cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
                          cfg_.eqName != saved_.eqName || cfg_.overlayOn != saved_.overlayOn ||
                          cfg_.overlaySize != saved_.overlaySize || cfg_.overlayOpacity != saved_.overlayOpacity ||
-                         cfg_.overlayPos != saved_.overlayPos;
+                         cfg_.overlayPos != saved_.overlayPos || cfg_.overlayLevel != saved_.overlayLevel;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -1206,26 +1208,41 @@ void App::pageSettings() {
     ImGui::Dummy(ImVec2(0, S(6)));
 
     beginCard("##access", "Accessibility", nullptr, 0,
-              "For players who can't hear well: shows where enemy footsteps come from. It lights only for a walking rhythm "
-              "(3+ steps from one direction), so reloads, clicks, gunfire, explosions and rain are ignored, and so are "
-              "your own sounds (straight ahead). "
+              "For players who can't hear well: shows where enemy footsteps come from. A detector picks out short, "
+              "crunchy impacts at footstep level; your own sounds (straight ahead) are ignored. Detection sets how sure it "
+              "must be: Sensitive shows every such impact, Balanced needs a second step from the same direction, Strict "
+              "needs a steady walking rhythm (ignores reloads and most gunfire, but reacts later). "
               "It only reads the audio TacAudio already processes - nothing inside the game.");
     const ImVec2 cardTop = ImGui::GetCursorScreenPos();
     const float previewW = S(150);
     const float rowW = ImGui::GetContentRegionAvail().x - previewW - S(20);
     ImGui::BeginGroup();
     ImGui::PushItemWidth(rowW);
-    ImGui::BeginChild("##accrows", ImVec2(rowW, S(215)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps - reloads, gunfire and your own sounds are ignored.",
-              def.overlayOn);
+    ImGui::BeginChild("##accrows", ImVec2(rowW, S(285)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps. Your own sounds are ignored.", def.overlayOn);
     ImGui::BeginDisabled(!cfg_.overlayOn);
     {
         static const std::vector<std::string> kPos = {"Top left", "Top right", "Bottom left", "Bottom right", "Center"};
         segmentedRow("Position", &cfg_.overlayPos, kPos, def.overlayPos, "Where the ring sits on your main screen.");
+        static const std::vector<std::string> kLvl = {"Sensitive", "Balanced", "Strict"};
+        segmentedRow("Detection", &cfg_.overlayLevel, kLvl, def.overlayLevel,
+                     "Sensitive: every step-like sound. Balanced: from the 2nd step. Strict: steady walking only.");
     }
     sliderRow("Size", &cfg_.overlaySize, 40.0f, 300.0f, "%.0f px", def.overlaySize, "Radius of the ring.");
     sliderRow("Opacity", &cfg_.overlayOpacity, 10.0f, 100.0f, "%.0f %%", def.overlayOpacity, "How visible the ring is.");
     ImGui::EndDisabled();
+    {  // what the detector heard (helps to pick the level, and to report problems)
+        const long long shown = cfg_.overlayLevel == 0   ? stepCount_[0] - stepCount_[1]
+                                : cfg_.overlayLevel == 1 ? stepCount_[3]
+                                                         : stepCount_[4];
+        char buf[256];
+        std::snprintf(buf, sizeof(buf),
+                      "Heard so far: %lld step-like sounds - %lld your own (ignored), %lld shown at Sensitive, %lld at "
+                      "Balanced, %lld at Strict. Shown now: %lld.",
+                      stepCount_[0], stepCount_[1], stepCount_[0] - stepCount_[1], stepCount_[3], stepCount_[4], shown);
+        para(buf, col::Dim, 12.0f);
+        if (ImGui::SmallButton("Reset counters")) stepCount_ = {};
+    }
     para("Works over windowed and borderless-fullscreen games (not exclusive fullscreen). Some games and tournaments "
          "don't allow sound-visualisation overlays - check the rules before using it in ranked or competitive play.",
          col::Yellow, 12.0f);
@@ -1558,14 +1575,21 @@ void App::pollOverlay() {
             n = std::min<std::size_t>(st->channels, 8);
             const SpeakerLayout lay = layoutFromChannelMask(defaultChannelMask(static_cast<std::uint32_t>(n)));
             n = std::min(n, lay.size());
+            if (stepSeenValid_)
+                for (std::size_t i = 0; i < 5; ++i)  // audiodg restarted: its counters start over
+                    stepCount_[i] += st->stepStat[i] >= stepSeen_[i] ? st->stepStat[i] - stepSeen_[i] : st->stepStat[i];
+            stepSeen_ = st->stepStat;
+            stepSeenValid_ = true;
             for (std::size_t c = 0; c < n; ++c) {
-                steps[c] = st->steps[c];
+                steps[c] = st->hasLevels ? st->stepsLevel[static_cast<std::size_t>(cfg_.overlayLevel)][c] : st->steps[c];
                 az[c] = lay.speakers[c].azimuthDeg;
                 lfe[c] = lay.speakers[c].isLfe;
             }
         }
     } else {
-        n = session_.inputMeters(peaks, az, lfe, steps);
+        int d[5] = {};
+        n = session_.inputMeters(peaks, az, lfe, steps, cfg_.overlayLevel, d);
+        for (std::size_t i = 0; i < 5; ++i) stepCount_[i] += d[i];
     }
     if (n > 0) dirField_.updateWeights(steps, az, lfe, n, std::min(dt, 0.2f));
     else dirField_.decay(std::min(dt, 0.2f));

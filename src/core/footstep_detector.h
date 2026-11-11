@@ -11,19 +11,23 @@
 //      * audible: above the noise floor
 //    Onsets are judged 16 ms later, once the whole sound is there.
 //
-// 2. FootstepTracker (all channels together) turns impacts into *footsteps*. Many sounds are
-//    short crunchy impacts too (reloads, bolt clicks, distant shots, bullet hits, hit markers), so
-//    an impact only counts when it is part of a walk:
-//      * rhythm: at least 3 impacts from the same direction (within 60 degrees), 0.22-1.0 s apart,
-//        each gap within 0.7-1.43x of the previous one (walking and running are regular,
-//        reload sounds are not)
-//      * short: one step's heel, gravel and toe are over within ~0.15 s; a sound that keeps
-//        hitting (automatic fire, a reload rattle) is not a step
-//      * not your own sounds: your weapon, reload and footsteps are mixed straight ahead / to
-//        every speaker (not placed in the world), so impacts centred within 15 degrees of the
-//        front, or spread evenly over the speakers, are ignored. An enemy right in front of you
-//        is on your screen anyway.
-//    The first two steps of a walk only arm the tracker; the ring lights from the third on.
+// 2. FootstepTracker (all channels together) decides which impacts are enemy footsteps. Every
+//    impact is placed (direction from how much it added on each speaker), then:
+//      * your own sounds are dropped: your weapon, reload and footsteps are mixed straight ahead
+//        or evenly to every speaker (not placed in the world), so impacts centred within 12
+//        degrees of the front, or with no clear direction, are ignored. An enemy right in front
+//        of you is on your screen anyway.
+//      * the rest is reported at three levels (the app picks one, "Detection"):
+//          Sensitive - every placed impact
+//          Balanced  - an impact that follows another from the same direction (within 60
+//                      degrees) 0.2-1.2 s earlier: the second step of a walk on. Single clicks,
+//                      single shots and bullet hits are dropped.
+//          Strict    - three steps or more at a steady pace (each gap 0.7-1.43x the previous one,
+//                      once walking, one missed step allowed). Reloads and most gunfire are
+//                      dropped.
+//      * Balanced and Strict also skip bursts: onsets every < 0.2 s, twice in a row
+//        (automatic fire, rattles) block them for 0.5 s.
+//    Counters tell the app what was heard and why it was dropped.
 // Real-time safe (no allocation after construction, no locks).
 
 #include <array>
@@ -65,6 +69,15 @@ private:
 class FootstepTracker {
 public:
     static constexpr std::size_t kMaxChannels = 8;
+    static constexpr int kLevels = 3;  // 0 sensitive, 1 balanced, 2 strict
+
+    struct Stats {
+        int impacts = 0;   // footstep-like impacts heard
+        int own = 0;       // dropped: straight ahead / no clear direction (your own sounds)
+        int single = 0;    // dropped by Balanced: not followed up like a walk
+        int balanced = 0;  // reported at Balanced
+        int strict = 0;    // reported at Strict
+    };
 
     FootstepTracker() = default;
     // One entry per channel (speaker): its direction (degrees, 0 = front, + = right) and LFE flag.
@@ -73,43 +86,55 @@ public:
     std::size_t channels() const noexcept { return n_; }
     // ch: planar input, one pointer per channel (channels() of them).
     void process(const float* const* ch, std::size_t frames) noexcept;
-    // Strongest footstep activity on channel c since the last call.
-    float takeMax(std::size_t c) noexcept;
-    float activity(std::size_t c) const noexcept { return c < n_ ? act_[c] : 0.0f; }
+    // Strongest footstep activity on channel c at `level` since the last call.
+    float takeMax(std::size_t c, int level) noexcept;
     void reset() noexcept;
 
-    // Diagnostics (tests): impacts seen, and footsteps confirmed as part of a walk.
-    int impacts() const noexcept { return impacts_; }
-    int steps() const noexcept { return steps_; }
+    const Stats& totals() const noexcept { return total_; }
+    Stats takeStats() noexcept {  // since the last call
+        const Stats s = fresh_;
+        fresh_ = {};
+        return s;
+    }
 
 private:
     void decide() noexcept;
     void classify() noexcept;
+    void light(int level) noexcept;
+    void count(int Stats::*field) noexcept {
+        ++(total_.*field);
+        ++(fresh_.*field);
+    }
 
     struct Walk {
         std::int64_t last = -1;   // tick of the last step, -1 = unused
-        std::int64_t gap = 0;     // previous gap (ticks), 0 = only one step so far
+        std::int64_t gap = 0;     // pace (ticks between steps), 0 = unknown
         float az = 0;             // direction of the last step (degrees)
-        int count = 0;
+        int count = 0;            // steps
+        int steady = 0;           // steps at a steady pace
     };
 
     std::size_t n_ = 0;
     double tickRate_ = 3000.0;
     std::vector<FootstepDetector> det_;
-    std::array<float, kMaxChannels> cosAz_{}, sinAz_{}, azDeg_{};
+    std::array<float, kMaxChannels> cosAz_{}, sinAz_{};
     std::array<bool, kMaxChannels> lfe_{};
-    int nonLfe_ = 0;
     int phase_ = 0;                 // samples into the current decision
     std::int64_t now_ = 0;          // decisions so far
-    // An impact = a cluster of onsets (heel, gravel, toe) that ends after 120 ms without a new one.
+    // An impact starts at an onset and is measured for 40 ms; onsets in the next 150 ms belong to
+    // it (one step's heel, gravel and toe).
     bool high_ = false;             // candidate above the rise threshold
-    bool inImpact_ = false;
-    std::int64_t impactStart_ = 0, lastRise_ = 0;
+    bool measuring_ = false;
+    std::int64_t impactStart_ = -1000000;
+    // Bursts: onsets keep coming every < 0.2 s (automatic fire, a rattle). One step is heel + toe
+    // and then a pause, so two short gaps in a row is not walking.
+    std::int64_t lastRise_ = -1000000, vetoUntil_ = 0;
+    int shortRun_ = 0;
     std::array<float, kMaxChannels> evE_{};
-    std::array<Walk, 3> walks_{};
-    std::array<float, kMaxChannels> act_{}, max_{};
+    std::array<Walk, 4> walks_{};
+    std::array<std::array<float, kMaxChannels>, kLevels> act_{}, max_{};
     float cRel_ = 0;
-    int impacts_ = 0, steps_ = 0;
+    Stats total_{}, fresh_{};
 };
 
 }  // namespace tac

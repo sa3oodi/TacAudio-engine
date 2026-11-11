@@ -91,9 +91,15 @@ public:
     void takeInputPeaks(float* out, std::size_t n) noexcept {
         for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = inPeak_[c].exchange(0.0f);
     }
-    // Footstep activity per channel (0..1, core/footstep_detector.h), strongest since the last call.
-    void takeFootsteps(float* out, std::size_t n) noexcept {
-        for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = stepAct_[c].exchange(0.0f);
+    // Footstep activity per channel (0..1, core/footstep_detector.h) at `level` (0 sensitive,
+    // 1 balanced, 2 strict), strongest since the last call.
+    void takeFootsteps(float* out, std::size_t n, int level = 1) noexcept {
+        level = std::clamp(level, 0, FootstepTracker::kLevels - 1);
+        for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = stepAct_[level][c].exchange(0.0f);
+    }
+    // Footstep counters since the last call: impacts, own, single, balanced, strict.
+    void takeStepStats(int* out5) noexcept {
+        for (int i = 0; i < 5; ++i) out5[i] = stepStat_[i].exchange(0);
     }
 
     // ---- producer thread
@@ -156,7 +162,8 @@ private:
     std::atomic<float> limMin_{1.0f}, dynMin_{0.0f}, dynMax_{0.0f}, peakL_{0.0f}, peakR_{0.0f};
     std::atomic<bool> runningFlag_{false};
     std::atomic<float> inPeak_[kMaxMeterChannels] = {};
-    std::atomic<float> stepAct_[kMaxMeterChannels] = {};
+    std::atomic<float> stepAct_[FootstepTracker::kLevels][kMaxMeterChannels] = {};
+    std::atomic<int> stepStat_[5] = {};
     FootstepTracker steps_;
 };
 

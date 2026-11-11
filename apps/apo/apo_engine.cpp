@@ -190,18 +190,30 @@ void ApoEngine::worker() {
     }
 }
 
-void ApoEngine::takeFootsteps(float* out8) noexcept {
-    for (std::size_t c = 0; c < 8; ++c) out8[c] = stepAct_[c].exchange(0.0f);
+void ApoEngine::takeFootsteps(float* out8, int level) noexcept {
+    level = std::clamp(level, 0, FootstepTracker::kLevels - 1);
+    for (std::size_t c = 0; c < 8; ++c) out8[c] = stepAct_[level][c].exchange(0.0f);
+}
+
+void ApoEngine::takeStepStats(int* out5) noexcept {
+    for (int i = 0; i < 5; ++i) out5[i] = stepStat_[i].exchange(0);
 }
 
 void ApoEngine::renderBlock() noexcept {
     // Footstep detection on the game's channels (for the app's direction ring).
     steps_.process(inPtrs_.data(), kBlock);
-    for (std::size_t c = 0; c < steps_.channels(); ++c) {
-        const float a = steps_.takeMax(c);
-        float cur = stepAct_[c].load(std::memory_order_relaxed);
-        while (a > cur && !stepAct_[c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
+    for (std::size_t c = 0; c < steps_.channels(); ++c)
+        for (int l = 0; l < FootstepTracker::kLevels; ++l) {
+            const float a = steps_.takeMax(c, l);
+            float cur = stepAct_[l][c].load(std::memory_order_relaxed);
+            while (a > cur && !stepAct_[l][c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
+            }
         }
+    {
+        const FootstepTracker::Stats d = steps_.takeStats();
+        const int v[5] = {d.impacts, d.own, d.single, d.balanced, d.strict};
+        for (int i = 0; i < 5; ++i)
+            if (v[i]) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
     }
 
     // Pick up a new renderer (only once the previous old one has been collected).

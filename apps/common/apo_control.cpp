@@ -105,6 +105,16 @@ std::optional<Status> readStatus() {
                 std::istringstream is(v);
                 for (std::size_t c = 0; c < 8 && is >> s.steps[c]; ++c) {
                 }
+            } else if (k.size() == 6 && k.rfind("steps", 0) == 0 && k[5] >= '0' && k[5] <= '2') {
+                std::istringstream is(v);
+                auto& dst = s.stepsLevel[static_cast<std::size_t>(k[5] - '0')];
+                for (std::size_t c = 0; c < 8 && is >> dst[c]; ++c) {
+                }
+                s.hasLevels = true;
+            } else if (k == "stepstat") {
+                std::istringstream is(v);
+                for (std::size_t i = 0; i < 5 && is >> s.stepStat[i]; ++i) {
+                }
             } else if (k == "in") {
                 std::istringstream is(v);
                 s.inDb.fill(-120.0f);

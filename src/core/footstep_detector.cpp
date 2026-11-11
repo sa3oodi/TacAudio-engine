@@ -11,13 +11,13 @@ namespace {
 float coef(double ms, double fs) { return static_cast<float>(std::exp(-1.0 / (ms * 0.001 * fs))); }
 
 // Walk rules (see the header).
-constexpr double kMinGapSec = 0.22, kMaxGapSec = 1.0;   // between two steps
-constexpr double kGapRatio = 1.43;                      // each gap within 0.7-1.43x of the previous
+constexpr double kMinGapSec = 0.2, kMaxGapSec = 1.2;    // between two steps
+constexpr double kGapRatio = 1.43;                      // steady pace: each gap within 0.7-1.43x of the last
 constexpr float kMaxTurnDeg = 60.0f;                    // a walker moves slowly around you
-constexpr double kQuietSec = 0.12;                      // an impact ends after this long without an onset
-constexpr double kMaxImpactSec = 0.2;                   // longer = it keeps hitting (fire, rattle)
-constexpr float kCentreDeg = 15.0f;                     // straight ahead = your own sounds
-constexpr int kStepsToShow = 3;
+constexpr double kMeasureSec = 0.04, kMergeSec = 0.15;  // one impact
+constexpr float kCentreDeg = 12.0f;                     // straight ahead = your own sounds
+constexpr float kMinFocus = 0.25f;                      // less = no clear direction
+constexpr double kRiseMergeSec = 0.035, kBurstGapSec = 0.2, kBurstHoldSec = 0.5;
 
 float angleDiff(float a, float b) {
     float d = std::fmod(std::abs(a - b), 360.0f);
@@ -64,8 +64,8 @@ bool FootstepDetector::process(const float* x, std::size_t n) noexcept {
         const float jumpDb = 10.0f * std::log10((fast_ + 1e-14f) / (slow_ + 1e-14f));
         const float peakDb = 20.0f * std::log10(peak_ + 1e-9f);
         const float tiltDb = 10.0f * std::log10((bandE_ + 1e-14f) / (lowE_ + 1e-14f));
-        const float onset = std::clamp((jumpDb - 4.0f) / 6.0f, 0.0f, 1.0f);
-        const float notLoud = std::clamp((-14.0f - peakDb) / 6.0f, 0.0f, 1.0f);   // full below -20 dBFS
+        const float onset = std::clamp((jumpDb - 3.0f) / 5.0f, 0.0f, 1.0f);       // full at +8 dB
+        const float notLoud = std::clamp((-11.0f - peakDb) / 6.0f, 0.0f, 1.0f);   // full below -17 dBFS
         // Steps have a heel thump too, so some low end is fine; explosions / vehicles are 30+ dB bass-heavy.
         const float crunchy = std::clamp((tiltDb + 20.0f) / 8.0f, 0.0f, 1.0f);
         const float audible = std::clamp((peakDb + 66.0f) / 6.0f, 0.0f, 1.0f);    // above -60 dBFS
@@ -84,11 +84,9 @@ FootstepTracker::FootstepTracker(double fs, const std::vector<float>& azimuthDeg
       cRel_(coef(250.0, fs / FootstepDetector::kDecim)) {
     for (std::size_t c = 0; c < n_; ++c) {
         const float r = azimuthDeg[c] * std::numbers::pi_v<float> / 180.0f;
-        azDeg_[c] = azimuthDeg[c];
         cosAz_[c] = std::cos(r);
         sinAz_[c] = std::sin(r);
         lfe_[c] = lfe[c];
-        if (!lfe[c]) ++nonLfe_;
     }
 }
 
@@ -96,19 +94,21 @@ void FootstepTracker::reset() noexcept {
     for (auto& d : det_) d.reset();
     phase_ = 0;
     now_ = 0;
-    high_ = inImpact_ = false;
-    impactStart_ = lastRise_ = 0;
+    high_ = measuring_ = false;
+    impactStart_ = lastRise_ = -1000000;
+    vetoUntil_ = 0;
+    shortRun_ = 0;
     evE_.fill(0.0f);
     walks_ = {};
-    act_.fill(0.0f);
-    max_.fill(0.0f);
-    impacts_ = steps_ = 0;
+    act_ = {};
+    max_ = {};
+    total_ = fresh_ = {};
 }
 
-float FootstepTracker::takeMax(std::size_t c) noexcept {
-    if (c >= n_) return 0.0f;
-    const float m = max_[c];
-    max_[c] = act_[c];
+float FootstepTracker::takeMax(std::size_t c, int level) noexcept {
+    if (c >= n_ || level < 0 || level >= kLevels) return 0.0f;
+    const float m = max_[level][c];
+    max_[level][c] = act_[level][c];
     return m;
 }
 
@@ -117,7 +117,8 @@ void FootstepTracker::process(const float* const* ch, std::size_t frames) noexce
     std::size_t off = 0;
     while (off < frames) {
         // All channels advance together, one decision (kDecim samples) at a time.
-        const std::size_t len = std::min<std::size_t>(frames - off, static_cast<std::size_t>(FootstepDetector::kDecim - phase_));
+        const std::size_t len =
+            std::min<std::size_t>(frames - off, static_cast<std::size_t>(FootstepDetector::kDecim - phase_));
         for (std::size_t c = 0; c < n_; ++c) det_[c].process(ch[c] + off, len);
         phase_ += static_cast<int>(len);
         off += len;
@@ -134,39 +135,53 @@ void FootstepTracker::decide() noexcept {
     for (std::size_t c = 0; c < n_; ++c)
         if (!lfe_[c]) cand = std::max(cand, det_[c].candidate());
 
-    // Onsets (with hysteresis) are grouped into impacts.
-    if (!high_ && cand >= 0.5f) {
-        high_ = true;
-        if (!inImpact_) {
-            inImpact_ = true;
-            impactStart_ = now_;
-            evE_.fill(0.0f);
+    bool rise = false;
+    if (!high_ && cand >= 0.4f) {
+        high_ = rise = true;
+        const double gap = static_cast<double>(now_ - lastRise_) / tickRate_;
+        if (gap >= kRiseMergeSec) {
+            shortRun_ = gap <= kBurstGapSec ? shortRun_ + 1 : 0;
+            lastRise_ = now_;
+            if (shortRun_ >= 2) vetoUntil_ = now_ + static_cast<std::int64_t>(kBurstHoldSec * tickRate_);
         }
-        lastRise_ = now_;
-    } else if (high_ && cand < 0.25f) {
+    } else if (high_ && cand < 0.2f) {
         high_ = false;
     }
-    if (inImpact_) {
-        // What the impact added on each speaker, over its first 40 ms (its direction and spread).
-        if (static_cast<double>(now_ - impactStart_) < 0.04 * tickRate_)
-            for (std::size_t c = 0; c < n_; ++c)
-                if (!lfe_[c]) evE_[c] = std::max(evE_[c], det_[c].excessEnergy());
-        if (!high_ && static_cast<double>(now_ - lastRise_) > kQuietSec * tickRate_) {
-            inImpact_ = false;
+    if (rise && !measuring_ && static_cast<double>(now_ - impactStart_) >= kMergeSec * tickRate_) {
+        measuring_ = true;
+        impactStart_ = now_;
+        evE_.fill(0.0f);
+    }
+    if (measuring_) {
+        // What the impact added on each speaker (its direction and spread).
+        for (std::size_t c = 0; c < n_; ++c)
+            if (!lfe_[c]) evE_[c] = std::max(evE_[c], det_[c].excessEnergy());
+        if (static_cast<double>(now_ - impactStart_) >= kMeasureSec * tickRate_) {
+            measuring_ = false;
             classify();
         }
     }
 
+    for (int l = 0; l < kLevels; ++l)
+        for (std::size_t c = 0; c < n_; ++c) {
+            act_[l][c] *= cRel_;
+            max_[l][c] = std::max(max_[l][c], act_[l][c]);
+        }
+}
+
+void FootstepTracker::light(int level) noexcept {
+    float peak = 0.0f;
+    for (std::size_t c = 0; c < n_; ++c) peak = std::max(peak, evE_[c]);
+    if (peak <= 0.0f) return;
     for (std::size_t c = 0; c < n_; ++c) {
-        act_[c] *= cRel_;
-        max_[c] = std::max(max_[c], act_[c]);
+        if (lfe_[c]) continue;
+        const float w = std::min(1.0f, std::sqrt(evE_[c] / peak));  // amplitude share
+        act_[level][c] = std::max(act_[level][c], w);
+        max_[level][c] = std::max(max_[level][c], act_[level][c]);
     }
 }
 
 void FootstepTracker::classify() noexcept {
-    ++impacts_;
-    if (static_cast<double>(lastRise_ - impactStart_) > kMaxImpactSec * tickRate_) return;  // keeps hitting
-
     float total = 0.0f, peak = 0.0f, x = 0.0f, y = 0.0f;
     for (std::size_t c = 0; c < n_; ++c) {
         total += evE_[c];
@@ -175,55 +190,65 @@ void FootstepTracker::classify() noexcept {
         y += evE_[c] * sinAz_[c];
     }
     if (peak <= 0.0f) return;
+    count(&Stats::impacts);
     const float az = std::atan2(y, x) * 180.0f / std::numbers::pi_v<float>;
     const float focus = std::sqrt(x * x + y * y) / total;  // 1 = one direction, 0 = all around
 
-    // Your own sounds: straight ahead, or spread evenly over the speakers.
-    int loudSpk = 0;
-    for (std::size_t c = 0; c < n_; ++c)
-        if (!lfe_[c] && evE_[c] >= 0.25f * peak) ++loudSpk;
-    const bool everywhere = nonLfe_ >= 4 && (loudSpk >= nonLfe_ - 1 || focus < 0.3f);
-    if (everywhere || angleDiff(az, 0.0f) < kCentreDeg) return;
+    // Your own sounds: straight ahead, or no clear direction.
+    if (focus < kMinFocus || angleDiff(az, 0.0f) < kCentreDeg) {
+        count(&Stats::own);
+        return;
+    }
+    light(0);
+    if (now_ < vetoUntil_) {  // a burst: not walking
+        count(&Stats::single);
+        return;
+    }
 
-    // Join the walk it continues (same direction, a step's gap, the same pace), else start one.
-    const std::int64_t start = impactStart_;
+    // The walk it continues: same direction, a step's gap.
+    const std::int64_t t = impactStart_;
+    for (auto& w : walks_)  // stopped walking
+        if (w.last >= 0 && static_cast<double>(t - w.last) > kMaxGapSec * tickRate_) w.last = -1;
     Walk* best = nullptr;
     for (auto& w : walks_) {
         if (w.last < 0) continue;
-        const double gap = static_cast<double>(start - w.last);
-        if (gap < kMinGapSec * tickRate_ || gap > kMaxGapSec * tickRate_) continue;
-        if (angleDiff(az, w.az) > kMaxTurnDeg) continue;
-        if (w.gap > 0) {
-            const double ratio = gap / static_cast<double>(w.gap);
-            if (ratio > kGapRatio || ratio < 1.0 / kGapRatio) continue;
-        }
-        if (!best || w.count > best->count) best = &w;
+        const double gap = static_cast<double>(t - w.last);
+        if (gap < kMinGapSec * tickRate_ || angleDiff(az, w.az) > kMaxTurnDeg) continue;
+        if (!best || w.last > best->last) best = &w;
     }
     if (best) {
-        best->gap = start - best->last;
-        best->last = start;
+        const std::int64_t gap = t - best->last;
+        double k = 0.0;  // steps this gap spans at the walk's pace (0 = not steady)
+        if (best->gap > 0)
+            for (double m : {1.0, 2.0}) {  // once walking steadily, one missed step is allowed
+                if (m > 1.0 && best->steady < 3) break;
+                const double ratio = static_cast<double>(gap) / (static_cast<double>(best->gap) * m);
+                if (ratio <= kGapRatio && ratio >= 1.0 / kGapRatio) {
+                    k = m;
+                    break;
+                }
+            }
+        best->steady = k > 0.0 ? std::max(best->steady, 2) + 1 : 2;
+        best->gap = k > 0.0 ? static_cast<std::int64_t>(static_cast<double>(gap) / k) : gap;
+        best->last = t;
         best->az = az;
         ++best->count;
     } else {
-        // Replace an expired walk, or the oldest.
         Walk* slot = &walks_[0];
         for (auto& w : walks_)
             if (w.last < slot->last) slot = &w;
-        *slot = Walk{start, 0, az, 1};
+        *slot = Walk{t, 0, az, 1, 1};
         best = slot;
+        count(&Stats::single);
     }
-    // Expire walks that stopped.
-    for (auto& w : walks_)
-        if (w.last >= 0 && static_cast<double>(now_ - w.last) > (kMaxGapSec + 0.4) * tickRate_) w.last = -1;
-    if (best->count < kStepsToShow) return;
 
-    // A footstep: light the speakers it came from.
-    ++steps_;
-    for (std::size_t c = 0; c < n_; ++c) {
-        if (lfe_[c]) continue;
-        const float w = std::sqrt(evE_[c] / peak);  // amplitude share
-        act_[c] = std::max(act_[c], std::min(1.0f, w));
-        max_[c] = std::max(max_[c], act_[c]);
+    if (best->count >= 2) {
+        light(1);
+        count(&Stats::balanced);
+    }
+    if (best->steady >= 3) {
+        light(2);
+        count(&Stats::strict);
     }
 }
 

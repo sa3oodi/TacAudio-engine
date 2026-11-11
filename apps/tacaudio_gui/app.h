@@ -49,6 +49,7 @@ struct AppSettings {
     float overlaySize = 90.0f;      // ring radius (px)
     float overlayOpacity = 80.0f;   // %
     int overlayPos = 1;             // 0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 centre
+    int overlayLevel = 1;           // footstep detection: 0 sensitive, 1 balanced, 2 strict
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
@@ -183,6 +184,9 @@ private:
     DirectionField dirField_;
     SoundOverlay overlay_;
     std::chrono::steady_clock::time_point lastOverlay_{}, overlayActive_{};
+    // Footstep counters while the ring is on: impacts, own, single, balanced, strict.
+    std::array<long long, 5> stepCount_{}, stepSeen_{};
+    bool stepSeenValid_ = false;
     bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
 
     // Game profiles and the game library (Profiles page).
