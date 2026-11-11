@@ -31,6 +31,11 @@ struct AppSettings {
     float stepsLevel = 3.0f;
     bool stepsSmart = true;
 
+    // Headphone EQ (the same for every game profile: it belongs to the headphones).
+    bool eqOn = false;
+    std::string eqText;   // compact form (core/headphone_eq.h)
+    std::string eqName;   // where it came from (file name / headphone model)
+
     // App behaviour.
     bool startWithWindows = false;  // mirrored from the registry Run key
     bool autoEngine = true;         // turn the engine on when the app starts
@@ -45,6 +50,7 @@ struct AppSettings {
         s.dynamics = dynOn ? dynPreset : "off";
         s.footstepsDb = stepsOn ? stepsLevel : 0.0f;
         s.footstepsSmart = stepsSmart;
+        s.eq = eqOn ? eqText : std::string();
         return s;
     }
 };
@@ -90,6 +96,8 @@ private:
     void pageSettings();
     void pageAbout();
     void pageSetup();
+    void eqCard();
+    void importEq(const std::string& text, const std::string& name);
     void pageProfiles();
     void pageHeadTest();
     void startHeadTest();
@@ -164,6 +172,7 @@ private:
     std::string lastApoIni_;
     std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
     std::optional<apoctl::Status> apoStatus_;
+    std::string eqError_;
     bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
 
     // Game profiles and the game library (Profiles page).

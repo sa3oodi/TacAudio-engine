@@ -12,6 +12,7 @@
 #include "core/biquad.h"
 #include "core/convolver.h"
 #include "core/dynamics.h"
+#include "core/headphone_eq.h"
 #include "core/hrtf.h"
 #include "core/layout.h"
 #include "core/room.h"
@@ -25,6 +26,7 @@ struct BinauralConfig {
     float masterGainDb = 0.0f;
     RoomParams room;               // default: neutral (dry)
     DynamicsParams dynamics;       // default: off
+    HeadphoneEq eq;                // headphone correction after everything else; default: none
 };
 
 class BinauralRenderer {
@@ -68,6 +70,7 @@ private:
     std::vector<float> sendGainL_, sendGainR_;  // per input channel
     std::vector<float> sendL_, sendR_;
     float lfeGain_, masterGain_;
+    std::vector<Biquad> eqL_, eqR_;  // headphone EQ chains per ear
     std::size_t tail_ = 0;
     std::vector<SpeakerBinding> bindings_;
 };

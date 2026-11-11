@@ -31,6 +31,7 @@ add_library(tac_core STATIC
     src/core/limiter.cpp
     src/core/room.cpp
     src/core/dynamics.cpp
+    src/core/headphone_eq.cpp
     src/engine/engine.cpp
 )
 target_include_directories(tac_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

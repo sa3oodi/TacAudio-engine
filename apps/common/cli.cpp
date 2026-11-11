@@ -209,6 +209,7 @@ BinauralConfig binauralFrom(const Args& a, float defaultGainDb, std::size_t defa
     c.dynamics.punch = static_cast<float>(a.num("--punch", c.dynamics.punch));
     c.dynamics.footstepDb = static_cast<float>(std::clamp(a.num("--footsteps", 0.0), 0.0, 12.0));
     c.dynamics.footstepSmart = a.num("--footsteps-smart", 1.0) != 0.0;
+    c.eq = HeadphoneEq::fromCompact(a.get("--eq", ""));
     if (c.dynamics.footstepDb > 0)
         std::printf("footsteps: +%.1f dB clarity around %.0f Hz while quiet\n", c.dynamics.footstepDb,
                     c.dynamics.footstepHz);

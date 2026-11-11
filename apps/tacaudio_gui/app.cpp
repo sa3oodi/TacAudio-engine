@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <numbers>
 #include <thread>
 
@@ -18,6 +19,7 @@
 #include "cli.h"
 #include "core/biquad.h"
 #include "core/dynamics.h"
+#include "core/headphone_eq.h"
 #include "platform/wasapi.h"
 #include "ui_widgets.h"
 
@@ -48,6 +50,8 @@ int indexOf(const std::vector<std::string>& v, const std::string& s, int fallbac
 }
 
 float toDb(float lin) { return lin > 1e-6f ? 20.0f * std::log10(lin) : -120.0f; }
+
+void openShellUrl(const wchar_t* url) { ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL); }
 
 // Wrapped paragraph.
 void para(const char* s, ImU32 color = ui::col::Dim, float size = 13.5f) {
@@ -97,6 +101,9 @@ AppSettings loadSettings() {
             else if (k == "stepsLevel") s.stepsLevel = std::stof(v);
             else if (k == "bass") s.sound.bassDb = std::stof(v);
             else if (k == "stepsSmart") s.stepsSmart = v == "1";
+            else if (k == "eqOn") s.eqOn = v == "1";
+            else if (k == "eq") s.eqText = v;
+            else if (k == "eqName") s.eqName = v;
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
@@ -152,7 +159,8 @@ void saveSettings(const AppSettings& s) {
       << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
-      << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\n";
+      << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
+      << "\neqName=" << s.eqName << "\n";
 }
 
 namespace {
@@ -271,6 +279,9 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         selectedGame_ = library_[2].dirLower;
         profiles_ = defaultProfiles(bundleOf(cfg_));
         activeProfile_ = 1;
+        cfg_.eqOn = true;  // sample correction curve for the Devices page
+        cfg_.eqName = "Example headphones";
+        cfg_.eqText = "-5.8|LSC:105:5.5:0.71|PK:180:-2.1:0.9|PK:2400:3.2:2.2|PK:4300:-3.5:3.5|PK:6200:2.4:4|HSC:10000:-1.5:0.71";
         applyBundle(cfg_, profiles_[1].bundle);
     }
 }
@@ -478,7 +489,8 @@ void App::pollBackground() {
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
                          cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
-                         cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates;
+                         cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
+                         cfg_.eqName != saved_.eqName;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -495,7 +507,7 @@ std::string App::apoIniText() const {
                   wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
                   cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
                   cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
-    return b;
+    return std::string(b) + "eq=" + cfg_.effective().eq + "\n";
 }
 
 // Direct mode: push settings to the engine when they change, and read its status (~8 Hz).
@@ -881,6 +893,8 @@ void App::pageDevices() {
         ui::text(status_.source.c_str(), status_.source.find("7.1") != std::string::npos ? col::Teal : col::Faint, 13.0f, true);
         endCard();
         ImGui::Dummy(ImVec2(0, S(6)));
+        eqCard();
+        ImGui::Dummy(ImVec2(0, S(6)));
         if (pillButton("Setup assistant", col::Card, col::Text, S(170))) {
             setupMode_ = 0;
             page_ = kPageSetup;
@@ -925,11 +939,96 @@ void App::pageDevices() {
     }
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
+    ImGui::EndDisabled();
+    eqCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+    ImGui::BeginDisabled(locked);
     if (pillButton("Refresh devices", col::Card, col::Text, S(170))) refreshDevices();
     ImGui::EndDisabled();
     ImGui::SameLine(0, S(10));
     if (pillButton("Setup assistant", col::Card, col::Text, S(170))) page_ = kPageSetup;
     if (ImGui::IsItemHovered()) tooltip("Step-by-step check of VB-CABLE, 7.1 and your devices");
+}
+
+void App::importEq(const std::string& text, const std::string& name) {
+    try {
+        const HeadphoneEq eq = HeadphoneEq::parseText(text);
+        cfg_.eqText = eq.toCompact();
+        cfg_.eqName = name;
+        cfg_.eqOn = true;
+        eqError_.clear();
+        requestRebuild();
+    } catch (const std::exception& e) {
+        eqError_ = e.what();
+    }
+}
+
+void App::eqCard() {
+    beginCard("##eq", "Headphone EQ", &cfg_.eqOn, 0,
+              "Corrects your headphones' own sound so the 3D picture is more accurate. Import a parametric EQ made for "
+              "your headphone model (Equalizer APO / AutoEq format). The same for every game profile.");
+    if (cardToggleChanged()) requestRebuild();
+    const HeadphoneEq eq = HeadphoneEq::fromCompact(cfg_.eqText);
+    {
+        auto freq = [](float x) { return 20.0 * std::pow(1000.0, static_cast<double>(x)); };  // 20 Hz .. 20 kHz
+        auto xOf = [](double f) { return static_cast<float>(std::log10(f / 20.0) / 3.0); };
+        const std::vector<Biquad> filters = eq.makeFilters(48000.0);
+        auto resp = [&](float x) {
+            float db = eq.preampDb;
+            for (const auto& f : filters) db += biquadMagnitudeDb(f, freq(x), 48000.0);
+            return std::clamp(db, -15.0f, 15.0f);
+        };
+        GraphAxis ax{-15.0f, 15.0f,
+                     {{xOf(50), "50"}, {xOf(100), "100"}, {xOf(200), "200"}, {xOf(500), "500"}, {xOf(1000), "1k"},
+                      {xOf(2000), "2k"}, {xOf(5000), "5k"}, {xOf(10000), "10k"}},
+                     {-12.0f, -6.0f, 0.0f, 6.0f, 12.0f}};
+        graph("##eqcurve", ImVec2(ImGui::GetContentRegionAvail().x, S(120)), ax, resp, col::Teal, cfg_.eqOn && !eq.empty());
+    }
+    char b[256];
+    if (eq.empty()) std::snprintf(b, sizeof(b), "No EQ loaded yet.");
+    else std::snprintf(b, sizeof(b), "%s  -  %zu filters, preamp %.1f dB", cfg_.eqName.empty() ? "Custom EQ" : cfg_.eqName.c_str(),
+                       eq.bands.size(), eq.preampDb);
+    ui::text(b, eq.empty() ? col::Faint : col::Text, 13.0f, !eq.empty());
+    ImGui::Dummy(ImVec2(0, S(2)));
+    if (actionButton("Import file...", true, true, S(150)) && !preview_) {
+        wchar_t file[MAX_PATH] = {};
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = GetActiveWindow();
+        ofn.lpstrFilter = L"Parametric EQ (*.txt)\0*.txt\0All files\0*.*\0";
+        ofn.lpstrFile = file;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.lpstrTitle = L"Choose a parametric EQ file (Equalizer APO / AutoEq ParametricEQ.txt)";
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameW(&ofn)) {
+            std::ifstream f(fs::path(file), std::ios::binary);
+            std::stringstream ss;
+            ss << f.rdbuf();
+            std::string name = toUtf8(fs::path(file).stem().wstring());
+            if (const auto p = name.find(" ParametricEQ"); p != std::string::npos) name.erase(p);
+            importEq(ss.str(), name);
+        }
+    }
+    ImGui::SameLine(0, S(10));
+    if (actionButton("Paste", false, true, S(100)) && !preview_) {
+        const char* clip = ImGui::GetClipboardText();
+        importEq(clip ? clip : "", "Pasted EQ");
+    }
+    if (ImGui::IsItemHovered()) tooltip("Paste parametric EQ text copied from a website (Preamp / Filter lines)");
+    ImGui::SameLine(0, S(10));
+    if (actionButton("Clear", false, !eq.empty(), S(100)) && !preview_) {
+        cfg_.eqText.clear();
+        cfg_.eqName.clear();
+        cfg_.eqOn = false;
+        requestRebuild();
+    }
+    ImGui::SameLine(0, S(10));
+    if (actionButton("Find your headphones", false, true, S(200))) openShellUrl(L"https://autoeq.app");
+    if (ImGui::IsItemHovered())
+        tooltip("AutoEq: free EQ settings for thousands of headphones. Choose your model, the 'Equalizer APO' "
+                "parametric format, download, then Import file here.");
+    if (!eqError_.empty()) para(eqError_.c_str(), col::Red, 12.5f);
+    endCard();
 }
 
 // ------------------------------------------------------------------ Performance page

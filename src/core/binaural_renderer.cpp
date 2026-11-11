@@ -54,6 +54,12 @@ BinauralRenderer::BinauralRenderer(const SpeakerLayout& layout, const HrirSet& h
         tail_ += static_cast<std::size_t>((cfg_.room.rt60 + 0.06) * sampleRate);
     }
 
+    if (!cfg_.eq.empty()) {
+        eqL_ = cfg_.eq.makeFilters(sampleRate);
+        eqR_ = eqL_;
+        masterGain_ *= dbToGain(cfg_.eq.preampDb);
+    }
+
     if (cfg_.dynamics.active()) {
         dyn_ = std::make_unique<ChannelDynamics>(sampleRate, layout_.size(), cfg_.dynamics);
         work_.assign(layout_.size(), std::vector<float>(cfg_.blockSize, 0.0f));
@@ -67,6 +73,8 @@ void BinauralRenderer::reset() noexcept {
     for (auto& f : lfeFilters_) f.reset();
     if (room_) room_->reset();
     if (dyn_) dyn_->reset();
+    for (auto& f : eqL_) f.reset();
+    for (auto& f : eqR_) f.reset();
 }
 
 void BinauralRenderer::takeDynamicsStats(float& minGainDb, float& maxGainDb) noexcept {
@@ -120,6 +128,10 @@ void BinauralRenderer::processBlock(const float* const* input, float* outL, floa
             outR[n] *= masterGain_;
         }
     }
+    for (auto& f : eqL_)
+        for (std::size_t n = 0; n < B; ++n) outL[n] = f.process(outL[n]);
+    for (auto& f : eqR_)
+        for (std::size_t n = 0; n < B; ++n) outR[n] = f.process(outR[n]);
 }
 
 AudioBuffer renderBinaural(const AudioBuffer& input, const SpeakerLayout& layout, const HrirSet& hrirs,

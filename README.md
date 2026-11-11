@@ -52,6 +52,7 @@ icon and hotkeys.
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB. *Smart* mode lifts only short impacts (steps, landings, reloads) and leaves steady sounds in the same band (rain, wind, engines) alone |
 | 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
+| 🎚️ **Headphone EQ** | Import a parametric correction for your headphone model (Equalizer APO / AutoEq format, file or paste); applied after 3D, in both modes |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
@@ -107,7 +108,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 |---|---|
 | **Sound** | Head (with the *Find your head* test), room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
 | **Profiles** | Your games as a library of covers. Give a game its own profile (start from Default or another profile); TacAudio switches to it while that game runs and back to Default when it closes. Edits on the Sound page go to the active profile |
-| **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode) |
+| **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode), and the headphone EQ (*Find your headphones* opens AutoEq, download the "Equalizer APO" parametric file, *Import file*) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
 | **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys, update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
@@ -250,7 +251,6 @@ installer/         Inno Setup script        scripts/  build_installer.ps1
 
 ## Roadmap
 
-- Headphone correction EQ per model
 - Upmix for stereo-only games
 - Code-signed installer
 

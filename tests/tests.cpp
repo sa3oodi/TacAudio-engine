@@ -12,6 +12,7 @@
 #include "core/binaural_renderer.h"
 #include "core/biquad.h"
 #include "core/dynamics.h"
+#include "core/headphone_eq.h"
 #include "core/convolver.h"
 #include "core/fft.h"
 #include "core/hrtf.h"
@@ -955,6 +956,54 @@ void testFootstepBoost() {
     CHECK_NEAR(gainAt(-45.0, 200.0), 0.0, 0.5);   // quiet but off-band: untouched
 }
 
+void testHeadphoneEq() {
+    // AutoEq / Equalizer APO text -> bands; compact round trip; response; renderer applies it.
+    const std::string text =
+        "Preamp: -6.2 dB\r\n"
+        "Filter 1: ON PK Fc 105 Hz Gain -2.4 dB Q 0.70\n"
+        "Filter 2: ON LSC Fc 105 Hz Gain 5.5 dB Q 0.71\n"
+        "Filter 3: OFF PK Fc 3000 Hz Gain 9 dB Q 1\n"
+        "Filter 4: ON HSC Fc 10000 Hz Gain 2.0 dB Q 0.71\n"
+        "Filter 5: ON PK Fc 2500 Hz Gain 4.0 dB Q 2.0\n";
+    const HeadphoneEq eq = HeadphoneEq::parseText(text);
+    CHECK_NEAR(eq.preampDb, -6.2, 1e-4);
+    CHECK(eq.bands.size() == 4);  // the OFF filter is skipped
+    CHECK(eq.bands[1].type == EqBand::Type::LowShelf);
+    const HeadphoneEq rt = HeadphoneEq::fromCompact(eq.toCompact());
+    CHECK(rt.bands.size() == 4);
+    CHECK_NEAR(rt.responseDb(2500.0), eq.responseDb(2500.0), 0.01);
+    // A lone peak filter: its gain at Fc, nothing far away.
+    HeadphoneEq one;
+    one.bands.push_back({EqBand::Type::Peak, 2500.0f, 4.0f, 2.0f});
+    CHECK_NEAR(one.responseDb(2500.0), 4.0, 0.05);
+    CHECK_NEAR(one.responseDb(100.0), 0.0, 0.05);
+    bool threw = false;
+    try {
+        (void)HeadphoneEq::parseText("hello world");
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+
+    // Renderer: a front sine at 2.5 kHz comes out 4 dB louder with the peak filter.
+    const SpeakerLayout lay = layoutFromChannelMask(0x4);  // centre only
+    const HrirSet h = HrirSet::makeSphericalHead(48000);
+    auto level = [&](const HeadphoneEq& e) {
+        BinauralConfig c;
+        c.blockSize = 256;
+        c.eq = e;
+        AudioBuffer in;
+        in.sampleRate = 48000;
+        in.channelMask = 0x4;
+        in.resize(1, 48000);
+        for (std::size_t i = 0; i < 48000; ++i)
+            in.channels[0][i] = static_cast<float>(0.1 * std::sin(2 * std::numbers::pi * 2500.0 * i / 48000.0));
+        const AudioBuffer out = renderBinaural(in, lay, h, c);
+        return 10 * std::log10(energy(std::vector<float>(out.channels[0].begin() + 24000, out.channels[0].begin() + 47000)));
+    };
+    CHECK_NEAR(level(one) - level(HeadphoneEq{}), 4.0, 0.1);
+}
+
 void testSmartFootsteps() {
     // Smart mode: short impacts in the footstep band are lifted, a steady sound in the same band
     // (rain, engine hum) is not.
@@ -1067,6 +1116,7 @@ int main() {
         {"M3 dynamics: tame loud, lift quiet, independent channels", testDynamics},
         {"M3 footstep boost: quiet band only", testFootstepBoost},
         {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
+        {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE
         {"SOFA import: MIT KEMAR conventions", testSofaKemar},
