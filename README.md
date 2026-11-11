@@ -47,6 +47,7 @@ icon and hotkeys.
 |---|---|
 | 🎯 **Direct mode** | Engine built into Windows audio on your headphones: no virtual cable, ~4 ms delay, keeps working with the app closed |
 | 🎧 **Measured heads** | SADIE II KEMAR and Neumann KU100 dummy heads included (+18 human heads optional), diffuse-field equalised so they sound neutral |
+| 👂 **Find your head** | 2-minute listening test: noise bursts from 8 directions through each head, you click where you heard them, TacAudio picks the head with the most accurate directions and fewest front/back mix-ups |
 | 🏠 **Room presets** | Neutral (dry, most precise), Balanced (small room), Spacious |
 | 🔫 **Combat dynamics** | Light / Medium / Strong, per channel and before 3D (a gun on one side never ducks footsteps behind you) |
 | 👣 **Footstep clarity** | Quiet-only 3.5 kHz clarity boost, 0 - 12 dB |
@@ -104,7 +105,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 
 | Page | What it's for |
 |---|---|
-| **Sound** | Head, room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
+| **Sound** | Head (with the *Find your head* test), room, combat dynamics + punch, footstep clarity, volume and bass, live meters. Every option has a &#x21BA; reset button; *Reset all* restores the defaults |
 | **Profiles** | Your games as a library of covers. Give a game its own profile (start from Default or another profile); TacAudio switches to it while that game runs and back to Default when it closes. Edits on the Sound page go to the active profile |
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |

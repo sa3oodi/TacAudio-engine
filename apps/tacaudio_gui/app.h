@@ -5,6 +5,7 @@
 #include <chrono>
 #include <deque>
 #include <map>
+#include <memory>
 #include <future>
 #include <optional>
 #include <string>
@@ -13,6 +14,7 @@
 #include "apo_control.h"
 #include "cable_check.h"
 #include "game_library.h"
+#include "head_test.h"
 #include "imgui.h"
 #include "profiles.h"
 #include "update_check.h"
@@ -74,6 +76,7 @@ public:
     static constexpr const char* kHotkey3d = "Ctrl + Alt + F9";
     static constexpr int kPageSetup = 5;
     static constexpr int kPageProfiles = 6;
+    static constexpr int kPageHeadTest = 7;
 
 private:
     void sidebar();
@@ -86,6 +89,10 @@ private:
     void pageAbout();
     void pageSetup();
     void pageProfiles();
+    void pageHeadTest();
+    void startHeadTest();
+    void stopHeadTest();
+    bool headTestBusy() const { return htState_ == 1 || htState_ == 2; }
 
     // Game profiles.
     void pollProfiles();
@@ -175,6 +182,18 @@ private:
     };
     std::map<std::wstring, Cover> covers_;
     std::future<std::pair<std::wstring, Image>> coverJob_;
+
+    // "Find your head" listening test.
+    std::unique_ptr<HeadTest> headTest_;
+    std::future<std::string> htPrep_;
+    int htState_ = 0;                      // 0 intro, 1 preparing, 2 running, 3 results
+    std::size_t htIndex_ = 0;
+    std::string htError_;
+    bool htResume_ = false;                // restart the cable session afterwards
+    double htAdvanceAt_ = -1.0;            // ImGui time to move to the next sound
+    int htPicked_ = -1;
+    std::vector<HeadTest::Result> htResults_;
+    std::string htDevice_;                 // dev: TACAUDIO_SMOKE_HEADTEST plays on this device instead
 
     // Update check.
     std::future<ReleaseInfo> updJob_;

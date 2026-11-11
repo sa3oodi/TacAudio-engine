@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <numbers>
+#include <thread>
 
 #include <windows.h>
 #include <commdlg.h>
@@ -158,6 +159,10 @@ App::App(bool previewRunning) : preview_(previewRunning) {
     applyBundle(cfg_, profiles_.front().bundle);
     saved_ = cfg_;
     lastStatus_ = lastSave_ = std::chrono::steady_clock::now();
+    {  // dev check of the listening test without sound on the headphones (smoke test only)
+        char dev[128] = {};
+        if (GetEnvironmentVariableA("TACAUDIO_SMOKE_HEADTEST", dev, sizeof(dev)) && dev[0]) htDevice_ = dev;
+    }
     refreshDevices();
     for (const auto& h : cli::listHeads()) {
         headNames_.push_back(h.name);
@@ -461,7 +466,7 @@ std::string App::apoIniText() const {
     std::snprintf(b, sizeof(b),
                   "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
                   "stepsLevel=%g\nbass=%g\n",
-                  wantRunning_ ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch, cfg_.sound.volumeDb,
+                  wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch, cfg_.sound.volumeDb,
                   cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(), cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel,
                   cfg_.sound.bassDb);
     return b;
@@ -534,6 +539,7 @@ void App::frame() {
     ImGui::PopStyleColor();
 
     sidebar();
+    if (page_ != kPageHeadTest && headTestBusy()) stopHeadTest();  // left the test page
     ImGui::SameLine(0, 0);
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
@@ -546,6 +552,7 @@ void App::frame() {
         case 3: pageSettings(); break;
         case kPageSetup: pageSetup(); break;
         case kPageProfiles: pageProfiles(); break;
+        case kPageHeadTest: pageHeadTest(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -582,7 +589,7 @@ void App::sidebar() {
     const char* labels[] = {"Sound", "Profiles", "Devices", "Setup", "Performance", "Settings", "About"};
     const int pages[] = {0, kPageProfiles, 1, kPageSetup, 2, 3, 4};
     for (int i = 0; i < 7; ++i)
-        if (navItem(glyphs[i], labels[i], page_ == pages[i])) page_ = pages[i];
+        if (navItem(glyphs[i], labels[i], (page_ == kPageHeadTest ? 0 : page_) == pages[i])) page_ = pages[i];
 
     // Engine status at the bottom of the sidebar.
     const float h = ImGui::GetWindowHeight();
@@ -724,6 +731,9 @@ void App::pageSound() {
         cfg_.sound.room = kRooms[static_cast<std::size_t>(room)];
         requestRebuild();
     }
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
+    if (pillButton("Find your head", col::CardHi, col::Text, S(160))) page_ = kPageHeadTest;
+    if (ImGui::IsItemHovered()) tooltip("A 2-minute listening test that picks the head that suits your ears best");
     endCard();
     ImGui::Dummy(ImVec2(0, gap - S(10)));
 
@@ -1327,6 +1337,220 @@ void App::setupCable() {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
         ui::text("Finish steps 1 and 2 first.", col::Faint, 12.5f);
     }
+}
+
+// ------------------------------------------------------------------ Find your head
+void App::startHeadTest() {
+    if (headTestBusy() || preview_) return;
+    htError_.clear();
+    htResults_.clear();
+    htIndex_ = 0;
+    htPicked_ = -1;
+    htAdvanceAt_ = -1.0;
+    // VB-CABLE mode plays exclusively on the headphones: pause it for the test.
+    htResume_ = !direct_ && (wantRunning_ || session_.running());
+    if (htResume_) {
+        wantRunning_ = false;
+        if (job_.valid()) job_.wait();
+        session_.stop();
+    }
+    std::vector<cli::HeadInfo> heads;
+    for (const auto& h : cli::listHeads())
+        if (heads.size() < 5) heads.push_back(h);  // the first five keep the test short
+    headTest_ = std::make_unique<HeadTest>();
+    htState_ = 1;  // Direct mode: apo.ini now says enabled=0 (plain stereo) so the test sounds pass unchanged
+    HeadTest* t = headTest_.get();
+    const std::string out = htDevice_.empty() ? cfg_.dev.output : htDevice_;
+    const unsigned seed = static_cast<unsigned>(GetTickCount64());
+    htPrep_ = std::async(std::launch::async, [t, heads, out, seed]() -> std::string {
+        wasapi::ComScope com;
+        try {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));  // engine switches to plain stereo
+            t->prepare(heads, out, seed);
+            return {};
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+    });
+}
+
+void App::stopHeadTest() {
+    if (htPrep_.valid()) htPrep_.wait();
+    if (headTest_) headTest_->close();
+    if (htState_ != 3) htState_ = 0;
+    if (htResume_) {
+        htResume_ = false;
+        wantRunning_ = true;  // supervise() restarts the cable session
+        retryAt_ = {};
+    }
+}
+
+void App::pageHeadTest() {
+    topBar("Find your head", "Pick the head (HRTF) that matches your ears - about 2 minutes, headphones on.");
+    const double now = ImGui::GetTime();
+    if (!htDevice_.empty()) {  // dev self-test: start at once, answer each sound correctly once it has played
+        if (htState_ == 0 && htError_.empty()) startHeadTest();
+        if (htState_ == 2 && htAdvanceAt_ < 0 && !headTest_->playing()) {
+            htPicked_ = headTest_->trial(htIndex_).dir;
+            headTest_->answer(htIndex_, htPicked_);
+            htAdvanceAt_ = now + 0.05;
+        }
+    }
+    if (htState_ == 1 && htPrep_.valid() && htPrep_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        htError_ = htPrep_.get();
+        if (htError_.empty()) {
+            htState_ = 2;
+            headTest_->play(0);
+        } else {
+            stopHeadTest();
+        }
+    }
+    if (htState_ == 2 && htAdvanceAt_ > 0 && now >= htAdvanceAt_) {  // next sound
+        htAdvanceAt_ = -1.0;
+        htPicked_ = -1;
+        if (++htIndex_ >= headTest_->size()) {
+            htResults_ = headTest_->results();
+            htState_ = 3;
+            stopHeadTest();
+        } else {
+            headTest_->play(htIndex_);
+        }
+    }
+
+    if (htState_ == 0 || htState_ == 1) {
+        beginCard("##htintro", "How it works", nullptr, 0);
+        char b[512];
+        const auto heads = cli::listHeads();
+        const std::size_t n = std::min<std::size_t>(heads.size(), 5);
+        std::snprintf(b, sizeof(b),
+                      "You hear %zu short bursts of noise, one at a time, each from one of 8 directions around you. Click "
+                      "where you heard it. The sounds are made with %zu different heads; the head that gives you the most "
+                      "accurate directions - and the fewest front/back mix-ups - is the best one for your ears.\n\n"
+                      "Use the headphones you play with, at a comfortable volume, in a quiet room. Don't guess too long: "
+                      "your first impression is what counts.",
+                      n * HeadTest::kDirs, n);
+        para(b);
+        ImGui::Dummy(ImVec2(0, S(8)));
+        if (htState_ == 1) {
+            spinner(S(9), col::Accent);
+            ImGui::SameLine(0, S(10));
+            ui::text("Preparing the sounds...", col::Dim, 13.5f);
+        } else {
+            if (actionButton("Start the test", true, !preview_ && !cfg_.dev.output.empty(), S(180))) startHeadTest();
+            ImGui::SameLine(0, S(10));
+            if (actionButton("Back", false, true, S(110))) page_ = 0;
+        }
+        if (!htError_.empty()) para(("Could not start: " + htError_).c_str(), col::Red, 12.5f);
+        endCard();
+        return;
+    }
+
+    if (htState_ == 3) {
+        beginCard("##htres", "Your result", nullptr, 0,
+                  "Average error: how far (in degrees) the direction you heard was from the real one. Front/back: "
+                  "sounds from the front heard behind you, or the other way round.");
+        for (std::size_t i = 0; i < htResults_.size(); ++i) {
+            const auto& r = htResults_[i];
+            ImGui::PushID(static_cast<int>(i));
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x;
+            const ImVec2 sz(w, S(58));
+            dl->AddRectFilled(p, p + sz, i == 0 ? withAlpha(col::Accent, 0.12f) : col::Well, S(10));
+            char b[160];
+            std::snprintf(b, sizeof(b), "%zu", i + 1);
+            dl->AddText(fonts.semibold, S(20), p + ImVec2(S(16), S(16)), i == 0 ? col::Accent : col::Faint, b);
+            dl->AddText(fonts.semibold, S(15), p + ImVec2(S(48), S(10)), col::Text, r.name.c_str());
+            dl->AddText(fonts.regular, S(12.5f), p + ImVec2(S(48), S(32)), col::Dim, r.description.c_str());
+            std::snprintf(b, sizeof(b), "%.0f\xC2\xB0 average error   |   %d front/back", r.meanErrorDeg, r.frontBack);
+            const ImVec2 bs = fonts.semibold->CalcTextSizeA(S(13.5f), FLT_MAX, 0, b);
+            dl->AddText(fonts.semibold, S(13.5f), p + ImVec2(w - S(150) - bs.x - S(20), S(20)), i == 0 ? col::Text : col::Dim, b);
+            const bool current = cfg_.sound.head == r.name;
+            ImGui::SetCursorScreenPos(p + ImVec2(w - S(150) - S(12), S(12)));
+            if (actionButton(current ? "In use" : (i == 0 ? "Use this head" : "Use"), i == 0 && !current, !current, S(150))) {
+                cfg_.sound.head = r.name;
+                requestRebuild();
+            }
+            ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + sz.y + S(8)));
+            ImGui::Dummy(ImVec2(0, 0));
+            ImGui::PopID();
+        }
+        para("Results close together? Run the test again - a few rounds give a surer answer. The head is saved to the "
+             "active game profile.",
+             col::Faint, 12.5f);
+        endCard();
+        ImGui::Dummy(ImVec2(0, S(6)));
+        if (actionButton("Run again", false, true, S(140))) {
+            htState_ = 0;
+            startHeadTest();
+        }
+        ImGui::SameLine(0, S(10));
+        if (actionButton("Done", true, true, S(120))) {
+            htState_ = 0;
+            page_ = 0;
+        }
+        return;
+    }
+
+    // --- Running: where did it come from?
+    const std::size_t total = headTest_->size();
+    char b[160];
+    std::snprintf(b, sizeof(b), "Sound %zu of %zu  -  where did it come from?", htIndex_ + 1, total);
+    beginCard("##htrun", b, nullptr, 0, "Click the direction. The circle is you seen from above - your nose points up.");
+    {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float w = ImGui::GetContentRegionAvail().x;
+        const float R = S(150);
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        const ImVec2 c(origin.x + w * 0.5f, origin.y + R + S(64));
+        // progress bar
+        dl->AddRectFilled(origin, origin + ImVec2(w, S(4)), col::Well, S(2));
+        dl->AddRectFilled(origin, origin + ImVec2(w * static_cast<float>(htIndex_) / static_cast<float>(total), S(4)), col::Accent,
+                          S(2));
+        dl->AddCircle(c, R, col::Line, 64, S(1.5f));
+        dl->AddCircle(c, R * 0.55f, withAlpha(col::Line, 0.5f), 64, S(1.0f));
+        // the listener: head + nose (front is up) + ears
+        dl->AddCircleFilled(c, S(30), col::CardHi);
+        dl->AddTriangleFilled(c + ImVec2(-S(9), -S(27)), c + ImVec2(S(9), -S(27)), c + ImVec2(0, -S(42)), col::CardHi);
+        dl->AddCircleFilled(c + ImVec2(-S(31), 0), S(7), col::CardHi);
+        dl->AddCircleFilled(c + ImVec2(S(31), 0), S(7), col::CardHi);
+        const char* labels[HeadTest::kDirs] = {"Front", "Front right", "Right", "Back right", "Back", "Back left", "Left", "Front left"};
+        const bool playing = headTest_->playing();
+        for (int d = 0; d < HeadTest::kDirs; ++d) {
+            const float a = HeadTest::kAzimuth[d] * std::numbers::pi_v<float> / 180.0f;
+            const ImVec2 pt = c + ImVec2(std::sin(a), -std::cos(a)) * R;
+            const float r = S(24);
+            ImGui::SetCursorScreenPos(pt - ImVec2(r, r));
+            ImGui::PushID(d);
+            const bool clicked = ImGui::InvisibleButton("##dir", ImVec2(2 * r, 2 * r));
+            const bool hov = ImGui::IsItemHovered();
+            ImGui::PopID();
+            const bool picked = htPicked_ == d;
+            dl->AddCircleFilled(pt, r, picked ? col::Accent : hov ? col::CardHi : col::Well);
+            dl->AddCircle(pt, r, picked || hov ? col::Accent : col::Line, 32, S(1.5f));
+            const ImVec2 ls = fonts.semibold->CalcTextSizeA(S(12), FLT_MAX, 0, labels[d]);
+            const ImVec2 lp = pt + ImVec2(std::sin(a), -std::cos(a)) * (r + S(16)) - ls * 0.5f;
+            dl->AddText(fonts.semibold, S(12), lp, hov || picked ? col::Text : col::Dim, labels[d]);
+            if (clicked && htAdvanceAt_ < 0) {
+                htPicked_ = d;
+                headTest_->answer(htIndex_, d);
+                htAdvanceAt_ = now + 0.45;
+            }
+        }
+        if (playing) {  // pulse while the sound plays
+            const float t = static_cast<float>(std::fmod(now, 0.8) / 0.8);
+            dl->AddCircle(c, S(34) + t * S(30), withAlpha(col::Accent, 0.6f * (1.0f - t)), 48, S(2));
+        }
+        ImGui::SetCursorScreenPos(ImVec2(origin.x, c.y + R + S(52)));
+        ImGui::Dummy(ImVec2(0, 0));
+    }
+    if (actionButton("Play again", false, htAdvanceAt_ < 0, S(140))) headTest_->play(htIndex_);
+    ImGui::SameLine(0, S(10));
+    if (actionButton("Stop test", false, true, S(120))) {
+        stopHeadTest();
+        htState_ = 0;
+    }
+    endCard();
 }
 
 // ------------------------------------------------------------------ Update check
