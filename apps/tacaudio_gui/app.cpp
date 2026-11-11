@@ -20,6 +20,8 @@
 #include "core/biquad.h"
 #include "core/dynamics.h"
 #include "core/headphone_eq.h"
+#include "core/layout.h"
+#include "core/wav.h"
 #include "platform/wasapi.h"
 #include "ui_widgets.h"
 
@@ -110,6 +112,9 @@ AppSettings loadSettings() {
             else if (k == "setupDone") s.setupDone = v == "1";
             else if (k == "autoProfiles") s.autoProfiles = v == "1";
             else if (k == "checkUpdates") s.checkUpdates = v == "1";
+            else if (k == "overlayOn") s.overlayOn = v == "1";
+            else if (k == "overlaySize") s.overlaySize = std::clamp(std::stof(v), 60.0f, 300.0f);
+            else if (k == "overlayOpacity") s.overlayOpacity = std::clamp(std::stof(v), 10.0f, 100.0f);
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -160,7 +165,8 @@ void saveSettings(const AppSettings& s) {
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
-      << "\neqName=" << s.eqName << "\n";
+      << "\neqName=" << s.eqName << "\noverlayOn=" << (s.overlayOn ? 1 : 0) << "\noverlaySize=" << s.overlaySize
+      << "\noverlayOpacity=" << s.overlayOpacity << "\n";
 }
 
 namespace {
@@ -279,6 +285,20 @@ App::App(bool previewRunning) : preview_(previewRunning) {
         selectedGame_ = library_[2].dirLower;
         profiles_ = defaultProfiles(bundleOf(cfg_));
         activeProfile_ = 1;
+        {  // Settings page: the direction ring preview, a sound behind-left
+            const SpeakerLayout lay = layoutFromChannelMask(0x63F);
+            float pk[8], az[8];
+            bool lf[8];
+            const float db[8] = {-30, -42, -38, -70, -12, -34, -20, -40};
+            for (int c = 0; c < 8; ++c) {
+                pk[c] = std::pow(10.0f, db[c] / 20.0f);
+                az[c] = lay.speakers[static_cast<std::size_t>(c)].azimuthDeg;
+                lf[c] = lay.speakers[static_cast<std::size_t>(c)].isLfe;
+            }
+            for (int i = 0; i < 20; ++i) dirField_.update(pk, az, lf, 8, 0.1f);
+            wchar_t ov[MAX_PATH] = {};  // dev: TACAUDIO_PREVIEW_OVERLAY=<file.bmp> saves the ring bitmap
+            if (GetEnvironmentVariableW(L"TACAUDIO_PREVIEW_OVERLAY", ov, MAX_PATH)) overlay_.saveBitmap(dirField_, 140, 0.8f, ov);
+        }
         cfg_.eqOn = true;  // sample correction curve for the Devices page
         cfg_.eqName = "Example headphones";
         cfg_.eqText = "-5.8|LSC:105:5.5:0.71|PK:180:-2.1:0.9|PK:2400:3.2:2.2|PK:4300:-3.5:3.5|PK:6200:2.4:4|HSC:10000:-1.5:0.71";
@@ -440,6 +460,7 @@ void App::pollBackground() {
     pollProfiles();
     pollUpdates();
     pollDirect();
+    pollOverlay();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
         wantRebuild_ = false;
@@ -490,7 +511,8 @@ void App::pollBackground() {
                          cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
                          cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
-                         cfg_.eqName != saved_.eqName;
+                         cfg_.eqName != saved_.eqName || cfg_.overlayOn != saved_.overlayOn ||
+                         cfg_.overlaySize != saved_.overlaySize || cfg_.overlayOpacity != saved_.overlayOpacity;
     if (!preview_ && changed && now - lastSave_ > std::chrono::seconds(1)) {
         saveSettings(cfg_);
         saved_ = cfg_;
@@ -584,6 +606,10 @@ void App::frame() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(30), S(22)));
     ImGui::BeginChild("##main", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+    if (preview_) {  // dev screenshots of long pages: TACAUDIO_PREVIEW_SCROLL=<px>
+        char sc[16] = {};
+        if (GetEnvironmentVariableA("TACAUDIO_PREVIEW_SCROLL", sc, sizeof(sc))) ImGui::SetScrollY(S(static_cast<float>(atof(sc))));
+    }
     switch (page_) {
         case 0: pageSound(); break;
         case 1: pageDevices(); break;
@@ -1175,6 +1201,48 @@ void App::pageSettings() {
             ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
     endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    beginCard("##access", "Accessibility", nullptr, 0,
+              "For players who can't hear well: shows where game sounds come from, from the level of each 7.1 channel. "
+              "It only reads the audio TacAudio already processes - nothing inside the game.");
+    const ImVec2 cardTop = ImGui::GetCursorScreenPos();
+    const float previewW = S(150);
+    const float rowW = ImGui::GetContentRegionAvail().x - previewW - S(20);
+    ImGui::BeginGroup();
+    ImGui::PushItemWidth(rowW);
+    ImGui::BeginChild("##accrows", ImVec2(rowW, S(170)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+    toggleRow("Direction ring", &cfg_.overlayOn,
+              "A ring in the middle of the screen glows towards sounds (while game sound plays).", def.overlayOn);
+    ImGui::BeginDisabled(!cfg_.overlayOn);
+    sliderRow("Size", &cfg_.overlaySize, 60.0f, 300.0f, "%.0f px", def.overlaySize, "Radius of the ring.");
+    sliderRow("Opacity", &cfg_.overlayOpacity, 10.0f, 100.0f, "%.0f %%", def.overlayOpacity, "How visible the ring is.");
+    ImGui::EndDisabled();
+    para("Works over windowed and borderless-fullscreen games (not exclusive fullscreen). Some games and tournaments "
+         "don't allow sound-visualisation overlays - check the rules before using it in ranked or competitive play.",
+         col::Yellow, 12.0f);
+    ImGui::EndChild();
+    ImGui::PopItemWidth();
+    ImGui::EndGroup();
+    {  // live preview of the ring
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 c = cardTop + ImVec2(rowW + S(20) + previewW * 0.5f, S(80));
+        const float R = S(56);
+        dl->AddCircleFilled(c, R + S(16), col::Well, 48);
+        for (int d = 0; d < 360; d += 3) {
+            const float a0 = (static_cast<float>(d) - 90.0f) * std::numbers::pi_v<float> / 180.0f;
+            const float a1 = (static_cast<float>(d + 3) - 90.0f) * std::numbers::pi_v<float> / 180.0f;
+            const float v = dirField_.at(d);
+            dl->PathArcTo(c, R, a0, a1, 2);
+            dl->PathStroke(v > 0.02f ? withAlpha(col::Accent, std::min(1.0f, 0.25f + v)) : withAlpha(col::Line, 0.9f),
+                           ImDrawFlags_None, S(3.0f + 6.0f * v));
+        }
+        dl->AddTriangleFilled(c + ImVec2(-S(5), -R - S(10)), c + ImVec2(S(5), -R - S(10)), c + ImVec2(0, -R - S(3)), col::Dim);
+        const char* lbl = "live preview";
+        const ImVec2 ls = fonts.regular->CalcTextSizeA(S(11.5f), FLT_MAX, 0, lbl);
+        dl->AddText(fonts.regular, S(11.5f), ImVec2(c.x - ls.x * 0.5f, c.y + R + S(22)), col::Faint, lbl);
+    }
+    endCard();
 }
 
 // ------------------------------------------------------------------ Setup assistant
@@ -1458,6 +1526,47 @@ void App::setupCable() {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
         ui::text("Finish steps 1 and 2 first.", col::Faint, 12.5f);
     }
+}
+
+// ------------------------------------------------------------------ Sound direction overlay
+void App::pollOverlay() {
+    using namespace std::chrono;
+    if (preview_) return;
+    if (!cfg_.overlayOn && page_ != 3) {  // the Settings page shows a live preview even while off
+        overlay_.hide();
+        return;
+    }
+    const auto now = steady_clock::now();
+    const float dt = duration<float>(now - lastOverlay_).count();
+    if (dt < 0.03f) return;
+    lastOverlay_ = now;
+
+    float peaks[8] = {}, az[8] = {};
+    bool lfe[8] = {};
+    std::size_t n = 0;
+    if (direct_) {
+        if (const auto st = apoctl::readStatus(); st && wantRunning_ && st->channels > 0) {
+            n = std::min<std::size_t>(st->channels, 8);
+            const SpeakerLayout lay = layoutFromChannelMask(defaultChannelMask(static_cast<std::uint32_t>(n)));
+            n = std::min(n, lay.size());
+            for (std::size_t c = 0; c < n; ++c) {
+                peaks[c] = std::pow(10.0f, st->inDb[c] / 20.0f);
+                az[c] = lay.speakers[c].azimuthDeg;
+                lfe[c] = lay.speakers[c].isLfe;
+            }
+        }
+    } else {
+        n = session_.inputMeters(peaks, az, lfe);
+    }
+    if (n > 0) dirField_.update(peaks, az, lfe, n, std::min(dt, 0.2f));
+    else dirField_.decay(std::min(dt, 0.2f));
+
+    if (dirField_.peak() > 0.05f) overlayActive_ = now;
+    // Shown while game sound is playing; hidden after 2 s of quiet (no ring on an idle desktop).
+    if (cfg_.overlayOn && now - overlayActive_ < seconds(2))
+        overlay_.show(dirField_, static_cast<int>(cfg_.overlaySize * ui::dpi), cfg_.overlayOpacity / 100.0f);
+    else
+        overlay_.hide();
 }
 
 // ------------------------------------------------------------------ Find your head

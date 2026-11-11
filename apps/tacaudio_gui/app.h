@@ -16,6 +16,7 @@
 #include "game_library.h"
 #include "head_test.h"
 #include "imgui.h"
+#include "overlay.h"
 #include "profiles.h"
 #include "update_check.h"
 #include "session.h"
@@ -44,6 +45,9 @@ struct AppSettings {
     bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)
     bool autoProfiles = true;       // switch the game profile when a game comes to the front
     bool checkUpdates = true;       // ask GitHub for a newer release (at launch, then twice a day)
+    bool overlayOn = false;         // accessibility: sound direction ring on screen
+    float overlaySize = 140.0f;     // ring radius (px)
+    float overlayOpacity = 80.0f;   // %
 
     SoundSettings effective() const {  // what the engine gets
         SoundSettings s = sound;
@@ -75,6 +79,7 @@ public:
     void toggle3d();
     void autoStartIfEnabled();
     bool engineWanted() const { return wantRunning_; }
+    bool wantsFastTick() const { return cfg_.overlayOn; }  // tray mode: keep the overlay smooth
     bool enabled3d() const { return cfg_.sound.enabled3d; }
     bool closeToTray() const { return cfg_.closeToTray; }
     bool hotkeysEnabled() const { return cfg_.hotkeys; }
@@ -107,6 +112,7 @@ private:
     // Game profiles.
     void pollProfiles();
     void pollUpdates();
+    void pollOverlay();
     void checkUpdatesNow();
     void activateProfile(int index);
     int profileForGame(const GameEntry& g) const;
@@ -173,6 +179,9 @@ private:
     std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
     std::optional<apoctl::Status> apoStatus_;
     std::string eqError_;
+    DirectionField dirField_;
+    SoundOverlay overlay_;
+    std::chrono::steady_clock::time_point lastOverlay_{}, overlayActive_{};
     bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
 
     // Game profiles and the game library (Profiles page).

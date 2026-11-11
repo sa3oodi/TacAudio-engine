@@ -85,6 +85,12 @@ public:
         right = peakR_.exchange(0.0f);
     }
 
+    // Input peak per channel (speaker) since the last call (linear), up to kMaxMeterChannels.
+    static constexpr std::size_t kMaxMeterChannels = 8;
+    void takeInputPeaks(float* out, std::size_t n) noexcept {
+        for (std::size_t c = 0; c < n && c < kMaxMeterChannels; ++c) out[c] = inPeak_[c].exchange(0.0f);
+    }
+
     // ---- producer thread
     void pushInput(const float* interleaved, std::size_t frames) noexcept;
     void pushSilence(std::size_t frames) noexcept;
@@ -144,6 +150,7 @@ private:
     std::atomic<double> bufferMs_{0}, targetMs_{0}, driftPpm_{0}, cpuAvg_{0}, cpuMax_{0};
     std::atomic<float> limMin_{1.0f}, dynMin_{0.0f}, dynMax_{0.0f}, peakL_{0.0f}, peakR_{0.0f};
     std::atomic<bool> runningFlag_{false};
+    std::atomic<float> inPeak_[kMaxMeterChannels] = {};
 };
 
 }  // namespace tac

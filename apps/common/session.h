@@ -78,6 +78,10 @@ public:
     SessionStatus status();
     // Output peaks per ear since the last call (linear); 0 when stopped. Cheap: call per frame.
     void meters(float& left, float& right);
+    // Input peak per source channel since the last call (linear) with each channel's direction
+    // (azimuth, + = right) and whether it is the LFE. Up to 8 channels; returns the count (0 when
+    // stopped).
+    std::size_t inputMeters(float* peaks8, float* azimuth8, bool* lfe8);
 
 private:
     std::shared_ptr<const HrirSet> loadHead(const std::string& name);  // cached

@@ -133,6 +133,13 @@ void Engine::renderBlock() noexcept {
     }
     if (!haveInput)
         for (auto& p : planar_) std::fill(p.begin(), p.end(), 0.0f);
+    for (std::size_t c = 0; c < planar_.size() && c < kMaxMeterChannels; ++c) {  // input meters (per speaker)
+        float pk = 0.0f;
+        for (float x : planar_[c]) pk = std::max(pk, std::fabs(x));
+        float cur = inPeak_[c].load(std::memory_order_relaxed);
+        while (pk > cur && !inPeak_[c].compare_exchange_weak(cur, pk, std::memory_order_relaxed)) {
+        }
+    }
 
     // Always render: HRIR tails decay naturally across underruns.
     renderer_->processBlock(planarPtrs_.data(), outL_.data(), outR_.data());

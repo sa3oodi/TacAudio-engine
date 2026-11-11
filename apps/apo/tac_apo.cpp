@@ -108,7 +108,8 @@ namespace {
 
 // ------------------------------------------------------------------ status for the app
 // Shared by every APO instance in this process (a game usually opens several streams).
-// Written about 8x per second to %ProgramData%\TacAudio\apo_status.ini.
+// Written about 20x per second to %ProgramData%\TacAudio\apo_status.ini (read by the app's level
+// meters and the sound direction overlay).
 std::atomic<float> g_inPeak[8] = {};
 std::atomic<float> g_outL{0.0f}, g_outR{0.0f}, g_dynMin{0.0f}, g_dynMax{0.0f};
 std::atomic<int> g_streams{0};
@@ -132,7 +133,7 @@ std::filesystem::path dataPath(const wchar_t* name);
 void writeStatusIfDue() {
     const unsigned long long now = GetTickCount64();
     unsigned long long last = g_lastStatus.load();
-    if (now - last < 125 || !g_lastStatus.compare_exchange_strong(last, now)) return;
+    if (now - last < 45 || !g_lastStatus.compare_exchange_strong(last, now)) return;
     const unsigned ch = std::min(g_inChannels.load(), 8u);
     char b[512];
     int len = std::snprintf(b, sizeof(b), "time=%llu\nstreams=%d\nchannels=%u\nin=", now, g_streams.load(), ch);

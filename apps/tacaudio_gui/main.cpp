@@ -434,7 +434,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
                 }
             }
             if (!g_visible && !smoke) {  // tray mode: no rendering, just keep the engine supervised
-                MsgWaitForMultipleObjects(0, nullptr, FALSE, 100, QS_ALLINPUT);
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, app.wantsFastTick() ? 30 : 100, QS_ALLINPUT);
                 app.tick();
                 continue;
             }
