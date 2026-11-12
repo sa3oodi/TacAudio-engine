@@ -1226,7 +1226,10 @@ void App::pageSettings() {
     ImGui::BeginGroup();
     ImGui::PushItemWidth(rowW);
     ImGui::BeginChild("##accrows", ImVec2(rowW, S(285)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
-    toggleRow("Footstep ring", &cfg_.overlayOn, "Glows towards enemy footsteps. Your own sounds are ignored.", def.overlayOn);
+    toggleRow("Footstep ring (experimental)", &cfg_.overlayOn,
+              "Glows towards enemy footsteps. Your own sounds are ignored. Experimental: it can miss steps or react to "
+              "other short sounds.",
+              def.overlayOn);
     ImGui::BeginDisabled(!cfg_.overlayOn);
     {
         static const std::vector<std::string> kPos = {"Top left", "Top right", "Bottom left", "Bottom right", "Center"};
