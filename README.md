@@ -62,12 +62,12 @@ icon and hotkeys.
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.6.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+1. Download **`TacAudio-Setup-0.7.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
 2. Run it. It installs for your user only into `%LOCALAPPDATA%\Programs\TacAudio`, with a Start
    menu entry and an uninstaller in *Settings &rarr; Apps*.
 
-> The installer is not code-signed yet, so Windows SmartScreen may warn you.
-> Click **More info &rarr; Run anyway**.
+> Until code signing is in place (see [Code signing policy](#code-signing-policy)), Windows
+> SmartScreen may warn you. Click **More info &rarr; Run anyway**.
 
 ### One-time setup (about 1 minute)
 
@@ -249,12 +249,13 @@ apps/tacaudio/     tacaudio-cli.exe        apps/tacrender/  tacrender.exe
 tests/             unit tests (each DSP block against a reference; engine vs. offline; drift, jitter)
 tools/             make_icon.py (app icon), fetch_sadie.py (head data)
 installer/         Inno Setup script        scripts/  build_installer.ps1
+docs/SIGNING.md    code signing setup      .signpath/  SignPath artifact configurations
 ```
 
 ## Roadmap
 
 - Upmix for stereo-only games
-- Code-signed installer
+- Code-signed installer (SignPath Foundation, applied for)
 
 ## Credits
 
@@ -264,8 +265,28 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Licence
 
-No licence has been chosen for TacAudio's own code yet; until then all rights are reserved by the
-author. Third-party components keep their own licences (see above).
+TacAudio's own code is released under the [MIT licence](LICENSE). Third-party components keep
+their own licences (see above).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org) (applied for; until then releases are unsigned).
+
+- Committers and reviewers: [sa3oodi](https://github.com/sa3oodi)
+- Approvers: [sa3oodi](https://github.com/sa3oodi)
+
+Only release builds made by this repository's GitHub Actions workflow are signed, and each one
+is approved by hand. See [docs/SIGNING.md](docs/SIGNING.md).
+
+## Privacy
+
+TacAudio does not collect or send any personal data. The only network request it makes on its
+own is the **update check**: a plain request to the GitHub API for the latest release
+(`api.github.com/repos/sa3oodi/TacAudio-engine/releases/latest`), at launch and twice a day. It
+can be turned off in *Settings* (*Check for updates*). Buttons such as *Download VB-CABLE* or
+*Find your headphones* only open a web page in your browser when you click them. Recordings made
+with *Record 15 s of game sound* stay on your PC.
 
 ## Disclaimer
 

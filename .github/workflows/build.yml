@@ -24,17 +24,93 @@ jobs:
         run: choco install innosetup -y --no-progress
 
       # Configures (newest Visual Studio on the runner), builds (Release), runs the unit tests,
-      # fetches the SADIE II heads and compiles the installer. Fails if any test fails; the
-      # relevant log lines are then shown as annotations on the run page.
-      - name: Build, test and package
+      # fetches the SADIE II heads and stages the files in dist/stage. Fails if any test fails;
+      # the relevant log lines are then shown as annotations on the run page.
+      - name: Build, test and stage
         shell: pwsh
         run: |
-          pwsh -NoProfile -File ./scripts/build_installer.ps1 2>&1 | Tee-Object -FilePath build.log
+          pwsh -NoProfile -File ./scripts/build_installer.ps1 -Step stage 2>&1 | Tee-Object -FilePath build.log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
             Select-String -Path build.log -Pattern 'error|FAIL|failed|Exception|not found' |
               Select-Object -Last 12 | ForEach-Object { Write-Output "::error::$($_.Line.Trim())" }
             exit $code
+          }
+
+      # Code signing (SignPath, see docs/SIGNING.md): only for release tags, and only once the
+      # repository variable SIGNPATH_ORGANIZATION_ID and the secret SIGNPATH_API_TOKEN exist.
+      # Otherwise the installer is built unsigned, as before.
+      - name: Check signing setup
+        id: sign
+        shell: pwsh
+        run: |
+          $on = "${{ startsWith(github.ref, 'refs/tags/v') && vars.SIGNPATH_ORGANIZATION_ID != '' }}" -eq "true"
+          "enabled=$($on.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          Write-Output "Code signing: $(if ($on) { 'on' } else { 'off (unsigned build)' })"
+
+      # 1) The programs and the engine DLL, before they go into the installer.
+      - name: Upload binaries for signing
+        if: steps.sign.outputs.enabled == 'true'
+        id: up-bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-binaries
+          path: |
+            dist/stage/*.exe
+            dist/stage/*.dll
+          if-no-files-found: error
+
+      - name: Sign binaries
+        if: steps.sign.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'TacAudio-engine' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: binaries
+          github-artifact-id: ${{ steps.up-bin.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/stage
+
+      - name: Build installer
+        shell: pwsh
+        run: pwsh -NoProfile -File ./scripts/build_installer.ps1 -Step package
+
+      # 2) The installer itself.
+      - name: Upload installer for signing
+        if: steps.sign.outputs.enabled == 'true'
+        id: up-setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: dist/TacAudio-Setup-*.exe
+          if-no-files-found: error
+
+      - name: Sign installer
+        if: steps.sign.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'TacAudio-engine' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.up-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/signed
+
+      - name: Use the signed installer
+        if: steps.sign.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          Get-ChildItem dist/signed -Filter 'TacAudio-Setup-*.exe' | ForEach-Object {
+            Copy-Item $_.FullName dist/ -Force
+            $sig = Get-AuthenticodeSignature (Join-Path dist $_.Name)
+            Write-Output "$($_.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { Write-Output "::error::installer signature is $($sig.Status)"; exit 1 }
           }
 
       - uses: actions/upload-artifact@v4
@@ -50,7 +126,7 @@ jobs:
           files: dist/TacAudio-Setup-*.exe
           body: |
             **Install:** download `TacAudio-Setup-*.exe` below and run it (per-user, no admin rights).
-            The installer is not code-signed yet: if SmartScreen warns, click *More info -> Run anyway*.
+            ${{ steps.sign.outputs.enabled == 'true' && 'The installer and its programs are code-signed (free code signing by SignPath.io, certificate by SignPath Foundation).' || 'This installer is not code-signed: if SmartScreen warns, click *More info -> Run anyway*.' }}
 
             **One-time setup:** the Setup assistant installs TacAudio's engine on your headphones
             (one administrator prompt, no virtual cable), then set your game to 7.1 / Home theater -

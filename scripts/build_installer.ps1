@@ -7,8 +7,16 @@
 #        Inno Setup 6 (https://jrsoftware.org/isinfo.php).
 # Output: dist\TacAudio-Setup-<version>.exe
 
+#
+# CI signs in between (see docs/SIGNING.md), so the work can run in two halves:
+#   -Step stage    build, test and stage the files into dist\stage (then the binaries get signed)
+#   -Step package  compile the installer from dist\stage as it is
+#   -Step all      both (default)
+
 param(
-    [string]$Generator = ""
+    [string]$Generator = "",
+    [ValidateSet("all", "stage", "package")]
+    [string]$Step = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +27,9 @@ $match = Select-String -Path "CMakeLists.txt" -Pattern 'project\(TacAudio VERSIO
 if (-not $match) { throw "Could not read the version from CMakeLists.txt" }
 $version = $match.Matches[0].Groups[1].Value
 Write-Host "== TacAudio $version"
+$stage = Join-Path $root "dist\stage"
 
+if ($Step -ne "package") {
 # 1) Head data shipped with the installer (SADIE II D1 + D2).
 $sadie = Join-Path $root "data\hrtf\sadie2"
 if (-not ((Test-Path "$sadie\D1.sofa") -and (Test-Path "$sadie\D2.sofa") -and (Test-Path "$sadie\LICENSE.txt"))) {
@@ -40,7 +50,6 @@ Write-Host "== Testing"
 if ($LASTEXITCODE -ne 0) { throw "Unit tests failed - not packaging" }
 
 # 3) Stage the installed file layout.
-$stage = Join-Path $root "dist\stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\hrtf\sadie2" | Out-Null
 Copy-Item "build\Release\TacAudio.exe", "build\Release\tacaudio-cli.exe", "build\Release\tacrender.exe" $stage
@@ -49,8 +58,13 @@ Copy-Item "build\Release\TacAudioApo.dll", "build\Release\tacapo-setup.exe" $sta
 Copy-Item "build\Release\hrtf\MIT_KEMAR_normal_pinna.sofa" "$stage\hrtf\"
 Copy-Item "$sadie\D1.sofa", "$sadie\D2.sofa", "$sadie\LICENSE.txt" "$stage\hrtf\sadie2\"
 Copy-Item "README.md" "$stage\README.md"
+Copy-Item "LICENSE" "$stage\LICENSE.txt"
 Copy-Item "THIRD_PARTY_NOTICES.md" "$stage\THIRD_PARTY_NOTICES.txt"
 Copy-Item "installer\after_install.txt" "$stage\GAME-SETUP.txt"
+Write-Host "== Staged in $stage"
+}
+if ($Step -eq "stage") { exit 0 }
+if (-not (Test-Path "$stage\TacAudio.exe")) { throw "dist\stage is empty - run with -Step stage first" }
 
 # 4) Compile the installer.
 $iscc = @(

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "installer": the Inno Setup installer. Paste into SignPath
+     (project TacAudio-engine, Artifact configurations, slug "installer"). -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="TacAudio-Setup-*.exe" min-matches="1" max-matches="1"><authenticode-sign /></pe-file>
+  </zip-file>
+</artifact-configuration>
