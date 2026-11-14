@@ -362,8 +362,18 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, hInst, bigIcon, LoadCursor(nullptr, IDC_ARROW),
                       nullptr, nullptr, L"TacAudioGui", smallIcon};
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"TacAudio", WS_OVERLAPPEDWINDOW, 80, 60, static_cast<int>(1200 * dpi),
-                              static_cast<int>(920 * dpi), nullptr, nullptr, hInst, nullptr);
+    int winW = static_cast<int>(1200 * dpi), winH = static_cast<int>(920 * dpi);
+    if (char sz[32] = {}; smoke && GetEnvironmentVariableA("TACAUDIO_SMOKE_SIZE", sz, sizeof(sz))) {  // dev: WxH client size
+        int w = 0, h = 0;
+        if (sscanf_s(sz, "%dx%d", &w, &h) == 2 && w >= 640 && h >= 480) {  // e.g. Store screenshots 1920x1080
+            RECT r{0, 0, w, h};
+            AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+            winW = r.right - r.left;
+            winH = r.bottom - r.top;
+        }
+    }
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"TacAudio", WS_OVERLAPPEDWINDOW, 80, 60, winW, winH, nullptr, nullptr,
+                              hInst, nullptr);
     g_hwnd = hwnd;
     // Dark title bar matching the app (Windows 11; ignored where unsupported).
     const BOOL dark = TRUE;
