@@ -40,6 +40,21 @@ struct HeadphoneEq {
     std::vector<Biquad> makeFilters(double sampleRate) const;  // one chain (per ear)
     // Total response at freqHz, including the preamp (for the UI graph and tests).
     float responseDb(double freqHz, double sampleRate = 48000.0) const;
+
+    // Volume and bass that suit headphones with this correction, from the app's own defaults:
+    //  * volume: the correction (with its preamp) makes most sound quieter or louder; the
+    //    suggestion gives back that change, measured as the average level over 200 Hz - 5 kHz
+    //    (where game sound and hearing are), so the headphones sound as loud as without EQ.
+    //    At most 0 dB (the limiter handles peaks).
+    //  * bass: corrections towards the usual target add a bass shelf, and the game's subwoofer
+    //    channel goes through it too. Half of that extra bass (30-120 Hz vs 300 Hz-3 kHz) is
+    //    taken back off the subwoofer channel, at most 6 dB, so explosions do not cover footsteps.
+    //    A correction that removes bass leaves the subwoofer channel as it is.
+    // Both rounded to 0.5 dB.
+    struct Suggestion {
+        float volumeDb = 0.0f, bassDb = 0.0f;
+    };
+    Suggestion suggest(float defaultVolumeDb, float defaultBassDb) const;
 };
 
 // Magnitude (dB) of one biquad at freqHz.

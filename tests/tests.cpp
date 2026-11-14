@@ -979,6 +979,35 @@ void testHeadphoneEq() {
     one.bands.push_back({EqBand::Type::Peak, 2500.0f, 4.0f, 2.0f});
     CHECK_NEAR(one.responseDb(2500.0), 4.0, 0.05);
     CHECK_NEAR(one.responseDb(100.0), 0.0, 0.05);
+
+    // Suggested volume / bass for these headphones (app defaults -6 dB and 0 dB).
+    {
+        const auto none = HeadphoneEq{}.suggest(-6.0f, 0.0f);  // no EQ: the app defaults
+        CHECK(none.volumeDb == -6.0f && none.bassDb == 0.0f);
+        HeadphoneEq flat;  // only a preamp: -5 dB everywhere -> volume +5, bass unchanged
+        flat.preampDb = -5.0f;
+        const auto f = flat.suggest(-6.0f, 0.0f);
+        CHECK_NEAR(f.volumeDb, -1.0, 1e-6);
+        CHECK_NEAR(f.bassDb, 0.0, 1e-6);
+        HeadphoneEq loud;  // more than the default's headroom back: capped at 0 dB
+        loud.preampDb = -12.0f;
+        CHECK_NEAR(loud.suggest(-6.0f, 0.0f).volumeDb, 0.0, 1e-6);
+        HeadphoneEq shelf;  // +8 dB bass shelf (preamp -8): half of the extra bass off the subwoofer
+        shelf.preampDb = -8.0f;
+        shelf.bands.push_back({EqBand::Type::LowShelf, 105.0f, 8.0f, 0.71f});
+        const auto s = shelf.suggest(-6.0f, 0.0f);
+        CHECK(s.bassDb <= -2.5f && s.bassDb >= -4.0f);
+        CHECK(s.volumeDb >= -0.5f);  // mids sit at -8 dB: given back up to the 0 dB cap
+        HeadphoneEq cut;  // a correction that removes bass: subwoofer channel left as it is
+        cut.bands.push_back({EqBand::Type::LowShelf, 105.0f, -6.0f, 0.71f});
+        CHECK_NEAR(cut.suggest(-6.0f, 0.0f).bassDb, 0.0, 1e-6);
+        const auto ex = HeadphoneEq::fromCompact(  // a real AutoEq-style correction
+            "-5.8|LSC:105:5.5:0.71|PK:180:-2.1:0.9|PK:2400:3.2:2.2|PK:4300:-3.5:3.5|PK:6200:2.4:4|HSC:10000:-1.5:0.71");
+        const auto e = ex.suggest(-6.0f, 0.0f);
+        std::printf("    example EQ suggests volume %.1f dB, bass %.1f dB\n", e.volumeDb, e.bassDb);
+        CHECK(e.volumeDb > -6.0f && e.volumeDb <= 0.0f);
+        CHECK(e.bassDb < 0.0f && e.bassDb >= -6.0f);
+    }
     bool threw = false;
     try {
         (void)HeadphoneEq::parseText("hello world");

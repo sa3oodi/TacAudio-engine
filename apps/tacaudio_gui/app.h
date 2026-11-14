@@ -17,6 +17,7 @@
 #include "head_test.h"
 #include "imgui.h"
 #include "overlay.h"
+#include "core/headphone_eq.h"
 #include "profiles.h"
 #include "update_check.h"
 #include "session.h"
@@ -105,6 +106,8 @@ private:
     void pageSetup();
     void eqCard();
     void importEq(const std::string& text, const std::string& name);
+    HeadphoneEq::Suggestion headphoneDefaults() const;  // Volume / Bass defaults (headphone EQ or app)
+    void eqChanged(const HeadphoneEq::Suggestion& before, bool setActive);
     void pageProfiles();
     void pageHeadTest();
     void startHeadTest();

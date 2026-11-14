@@ -166,4 +166,30 @@ float HeadphoneEq::responseDb(double freqHz, double fs) const {
     return db;
 }
 
+HeadphoneEq::Suggestion HeadphoneEq::suggest(float defaultVolumeDb, float defaultBassDb) const {
+    Suggestion s{defaultVolumeDb, defaultBassDb};
+    if (empty()) return s;
+    constexpr double fs = 48000.0;
+    const std::vector<Biquad> filters = makeFilters(fs);
+    auto avgDb = [&](double lo, double hi) {  // mean of the response on a log-frequency grid
+        constexpr int kSteps = 48;
+        double sum = 0;
+        for (int i = 0; i < kSteps; ++i) {
+            const double f = lo * std::pow(hi / lo, (i + 0.5) / kSteps);
+            double db = preampDb;
+            for (const auto& b : filters) db += biquadMagnitudeDb(b, f, fs);
+            sum += db;
+        }
+        return sum / kSteps;
+    };
+    auto half = [](double db) { return static_cast<float>(std::round(db * 2.0) / 2.0); };
+    const double vol = defaultVolumeDb, bass = defaultBassDb;
+    s.volumeDb = half(std::clamp(vol - avgDb(200.0, 5000.0), -30.0, 0.0));
+    const double extraBass = avgDb(30.0, 120.0) - avgDb(300.0, 3000.0);
+    s.bassDb = half(std::clamp(bass - 0.5 * std::max(0.0, extraBass), bass - 6.0, bass));
+    if (s.volumeDb == 0.0f) s.volumeDb = 0.0f;  // no "-0"
+    if (s.bassDb == 0.0f) s.bassDb = 0.0f;
+    return s;
+}
+
 }  // namespace tac

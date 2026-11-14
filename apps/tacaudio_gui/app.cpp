@@ -786,7 +786,12 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
 
 // ------------------------------------------------------------------ Sound page
 void App::pageSound() {
-    const AppSettings def;
+    AppSettings def;
+    {  // with a headphone EQ, Volume and Bass default to what suits those headphones
+        const HeadphoneEq::Suggestion hp = headphoneDefaults();
+        def.sound.volumeDb = hp.volumeDb;
+        def.sound.bassDb = hp.bassDb;
+    }
     char sub[200];
     std::snprintf(sub, sizeof(sub), "Profile: %s%s  -  every change applies live and is saved to this profile.",
                   profiles_[static_cast<std::size_t>(activeProfile_)].name.c_str(), gameProcess_ ? " (game running)" : "");
@@ -987,14 +992,43 @@ void App::pageDevices() {
     if (ImGui::IsItemHovered()) tooltip("Step-by-step check of VB-CABLE, 7.1 and your devices");
 }
 
+HeadphoneEq::Suggestion App::headphoneDefaults() const {
+    const AppSettings def;
+    if (!cfg_.eqOn || cfg_.eqText.empty()) return {def.sound.volumeDb, def.sound.bassDb};
+    return HeadphoneEq::fromCompact(cfg_.eqText).suggest(def.sound.volumeDb, def.sound.bassDb);
+}
+
+// The headphone EQ changed (from `before`): Volume and Bass follow the headphones' own defaults.
+// setActive: the profile on screen gets them exactly (a new EQ was imported); otherwise it moves
+// by the same amount as every other profile, which keeps each game's own tuning.
+void App::eqChanged(const HeadphoneEq::Suggestion& before, bool setActive) {
+    const HeadphoneEq::Suggestion now = headphoneDefaults();
+    const float dv = now.volumeDb - before.volumeDb, db = now.bassDb - before.bassDb;
+    auto shift = [&](SoundSettings& s) {
+        s.volumeDb = std::clamp(s.volumeDb + dv, -30.0f, 6.0f);
+        s.bassDb = std::clamp(s.bassDb + db, -12.0f, 6.0f);
+    };
+    for (std::size_t i = 0; i < profiles_.size(); ++i)
+        if (static_cast<int>(i) != activeProfile_) shift(profiles_[i].bundle.sound);
+    if (setActive) {
+        cfg_.sound.volumeDb = now.volumeDb;
+        cfg_.sound.bassDb = now.bassDb;
+    } else {
+        shift(cfg_.sound);
+    }
+    session_.setVolumeDb(cfg_.sound.volumeDb);
+    requestRebuild();
+}
+
 void App::importEq(const std::string& text, const std::string& name) {
     try {
         const HeadphoneEq eq = HeadphoneEq::parseText(text);
+        const HeadphoneEq::Suggestion before = headphoneDefaults();
         cfg_.eqText = eq.toCompact();
         cfg_.eqName = name;
         cfg_.eqOn = true;
         eqError_.clear();
-        requestRebuild();
+        eqChanged(before, true);
     } catch (const std::exception& e) {
         eqError_ = e.what();
     }
@@ -1003,8 +1037,15 @@ void App::importEq(const std::string& text, const std::string& name) {
 void App::eqCard() {
     beginCard("##eq", "Headphone EQ", &cfg_.eqOn, 0,
               "Corrects your headphones' own sound so the 3D picture is more accurate. Import a parametric EQ made for "
-              "your headphone model (Equalizer APO / AutoEq format). The same for every game profile.");
-    if (cardToggleChanged()) requestRebuild();
+              "your headphone model (Equalizer APO / AutoEq format). The same for every game profile. Importing one "
+              "also sets Volume and Bass to suit those headphones, and makes them the Sound page's defaults.");
+    if (cardToggleChanged()) {  // Volume and Bass move with the headphone defaults
+        const AppSettings def;
+        HeadphoneEq::Suggestion before{def.sound.volumeDb, def.sound.bassDb};  // was off: app defaults
+        if (!cfg_.eqOn && !cfg_.eqText.empty())                                 // was on
+            before = HeadphoneEq::fromCompact(cfg_.eqText).suggest(def.sound.volumeDb, def.sound.bassDb);
+        eqChanged(before, false);
+    }
     const HeadphoneEq eq = HeadphoneEq::fromCompact(cfg_.eqText);
     {
         auto freq = [](float x) { return 20.0 * std::pow(1000.0, static_cast<double>(x)); };  // 20 Hz .. 20 kHz
@@ -1026,6 +1067,12 @@ void App::eqCard() {
     else std::snprintf(b, sizeof(b), "%s  -  %zu filters, preamp %.1f dB", cfg_.eqName.empty() ? "Custom EQ" : cfg_.eqName.c_str(),
                        eq.bands.size(), eq.preampDb);
     ui::text(b, eq.empty() ? col::Faint : col::Text, 13.0f, !eq.empty());
+    if (!eq.empty() && cfg_.eqOn) {
+        const HeadphoneEq::Suggestion s = headphoneDefaults();
+        std::snprintf(b, sizeof(b), "Best for these headphones: Volume %.1f dB, Bass %+.1f dB (the Sound page's defaults)",
+                      s.volumeDb, s.bassDb);
+        ui::text(b, col::Faint, 12.0f);
+    }
     ImGui::Dummy(ImVec2(0, S(2)));
     if (actionButton("Import file...", true, true, S(150)) && !preview_) {
         wchar_t file[MAX_PATH] = {};
@@ -1054,10 +1101,11 @@ void App::eqCard() {
     if (ImGui::IsItemHovered()) tooltip("Paste parametric EQ text copied from a website (Preamp / Filter lines)");
     ImGui::SameLine(0, S(10));
     if (actionButton("Clear", false, !eq.empty(), S(100)) && !preview_) {
+        const HeadphoneEq::Suggestion before = headphoneDefaults();
         cfg_.eqText.clear();
         cfg_.eqName.clear();
         cfg_.eqOn = false;
-        requestRebuild();
+        eqChanged(before, false);
     }
     ImGui::SameLine(0, S(10));
     if (actionButton("Find your headphones", false, true, S(200))) openShellUrl(L"https://autoeq.app");
