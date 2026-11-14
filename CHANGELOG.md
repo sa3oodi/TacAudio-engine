@@ -4,6 +4,12 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.2 - 2026-11-14
+
+### Improved
+- Footstep clarity is back to the classic boost from before 0.7.0. The Smart option is removed: the classic boost sounded better in games.
+- Direct mode: after updating, click Update engine (or reinstall the engine on the Setup page) to get the change.
+
 ## 0.7.1 - 2026-11-14
 
 ### New
