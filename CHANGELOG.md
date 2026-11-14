@@ -12,6 +12,7 @@
 ### Improved
 - Clean updates: the old app files and the old engine in Windows audio are removed and the new version is installed fresh (one Windows prompt if the engine is installed). Your settings, game profiles and headphone EQ are kept.
 - Installing or updating the engine works even while Windows audio is using it, and with non-English device or user names.
+- Coming from 0.7.4 or older: install this version from the download below once. From now on, updates are one click (Update now).
 
 ## 0.7.4 - 2026-11-14
 
