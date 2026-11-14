@@ -150,3 +150,24 @@ jobs:
           name: TacAudio ${{ github.ref_name }}
           files: dist/TacAudio-Setup-*.exe
           body_path: release_notes.md
+
+      # Direct download link (no redirect) for the Microsoft Store: the installer is also kept on
+      # GitHub Pages, https://sa3oodi.github.io/TacAudio-engine/download/<file>. Earlier versions
+      # stay (the Store needs each version's link to keep working).
+      - name: Copy installer for GitHub Pages
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/pages | Out-Null
+          Copy-Item dist/TacAudio-Setup-*.exe dist/pages/
+
+      - name: Publish installer on GitHub Pages
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: dist/pages
+          destination_dir: download
+          keep_files: true
+          commit_message: "Installer ${{ github.ref_name }}"
