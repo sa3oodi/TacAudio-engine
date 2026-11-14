@@ -67,6 +67,8 @@ int usage() {
         "\n"
         "  tacaudio devices\n"
         "  tacaudio run (--in <dev> | --loopback <dev> | --test compass|circle|battle) [--out <dev>|null] [options]\n"
+        "  tacaudio record (--loopback <dev> | --in <dev>) [--seconds 15] <out.wav>   record + channel report\n"
+        "  tacaudio channels <file.wav>   which channels carry sound; is there real height (7.1.4)?\n"
         "\n"
         "options: --mute --latency-ms <ms> --no-drift --gain-db <dB> --limiter-db <dBFS> --no-limiter\n"
         "         --seconds <n> --block <n> --side <deg> --back <deg> --lfe-db <dB>\n"
@@ -194,6 +196,129 @@ private:
 // Plays one tone burst per channel into a render device while loopback-capturing the same
 // device, then checks every channel arrived on the right channel with no cross-talk.
 // The device is a virtual cable, so nothing is audible.
+// Which channels of a recording carry sound, and are the height channels their own sound or a copy
+// of the speaker below them? (Does a game really send 7.1.4?)
+int reportChannels(const AudioBuffer& b) {
+    const std::size_t C = b.numChannels(), N = b.numFrames();
+    if (C == 0 || N == 0) throw std::runtime_error("recording is empty");
+    const std::uint32_t mask = b.channelMask ? b.channelMask : defaultChannelMask(C);
+    std::vector<std::string> names(C);
+    try {
+        const SpeakerLayout l = layoutFromChannelMask(mask);
+        for (std::size_t c = 0; c < C && c < l.size(); ++c) names[c] = l.speakers[c].name;
+    } catch (const std::exception&) {
+    }
+    for (std::size_t c = 0; c < C; ++c)
+        if (names[c].empty()) names[c] = "ch" + std::to_string(c + 1);
+    auto db = [](double e) { return e > 1e-20 ? 10.0 * std::log10(e) : -200.0; };
+    const std::size_t win = b.sampleRate / 20;  // 50 ms
+    std::printf("%.1f s, %zu channels, mask 0x%X, %u Hz\n\n", static_cast<double>(N) / b.sampleRate, C, mask, b.sampleRate);
+    std::printf("  %-4s %8s %8s %9s   %s\n", "ch", "peak", "rms", "active", "(dBFS; active = 50 ms windows above -60 dBFS)");
+    std::vector<double> rms(C);
+    for (std::size_t c = 0; c < C; ++c) {
+        const auto& x = b.channels[c];
+        double pk = 0, e = 0;
+        std::size_t act = 0, wins = 0;
+        for (std::size_t s = 0; s + win <= N; s += win, ++wins) {
+            double we = 0;
+            for (std::size_t i = s; i < s + win; ++i) we += double(x[i]) * x[i];
+            if (db(we / win) > -60.0) ++act;
+        }
+        for (float v : x) {
+            pk = std::max(pk, double(std::abs(v)));
+            e += double(v) * v;
+        }
+        rms[c] = e / N;
+        std::printf("  %-4s %8.1f %8.1f %8.0f%%\n", names[c].c_str(), db(pk * pk), db(rms[c]),
+                    wins ? 100.0 * act / wins : 0.0);
+    }
+    // Height channels vs. the floor speaker below them.
+    const char* pairs[][2] = {{"TFL", "FL"}, {"TFR", "FR"}, {"TBL", "BL"}, {"TBR", "BR"}, {"TFC", "FC"}, {"TC", "FC"}};
+    auto find = [&](const char* n) -> int {
+        for (std::size_t c = 0; c < C; ++c)
+            if (names[c] == n) return static_cast<int>(c);
+        return -1;
+    };
+    bool anyHeight = false, ownHeight = false;
+    std::printf("\n");
+    for (const auto& p : pairs) {
+        const int h = find(p[0]), f = find(p[1]);
+        if (h < 0) continue;
+        anyHeight = true;
+        if (db(rms[h]) < -70.0) {
+            std::printf("  %-4s silent\n", p[0]);
+            continue;
+        }
+        double corr = 0;
+        if (f >= 0 && rms[f] > 0) {
+            double xy = 0;
+            for (std::size_t i = 0; i < N; ++i) xy += double(b.channels[h][i]) * b.channels[f][i];
+            corr = xy / N / std::sqrt(rms[h] * rms[f]);
+        }
+        const bool copy = corr > 0.95;
+        if (!copy) ownHeight = true;
+        std::printf("  %-4s has sound, %.1f dB vs %s, similarity %.2f -> %s\n", p[0], db(rms[h]) - (f >= 0 ? db(rms[f]) : 0.0),
+                    p[1], corr, copy ? "a copy of the speaker below (upmix, not real height)" : "its own sound (real height)");
+    }
+    if (!anyHeight) std::printf("verdict: this recording has no height channels (the device is not set to 7.1.4)\n");
+    else if (ownHeight) std::printf("verdict: REAL HEIGHT - the game sends its own sound to the ceiling speakers\n");
+    else std::printf("verdict: no real height - the ceiling channels are silent or copies\n");
+    return 0;
+}
+
+// Records what a device receives (loopback of an output, or an input) to a WAV, then reports it.
+int cmdRecord(const Args& a) {
+    if (a.positional.empty() || (a.has("--loopback") == a.has("--in"))) {
+        std::fprintf(stderr, "usage: tacaudio record (--loopback <output dev> | --in <input dev>) [--seconds 15] <out.wav>\n");
+        return 2;
+    }
+    wasapi::ComScope com;
+    const bool loop = a.has("--loopback");
+    const auto dev = requireDevice(a.get(loop ? "--loopback" : "--in"), loop);
+    constexpr std::uint32_t kRate = 48000;
+    const double seconds = std::clamp(a.num("--seconds", 15.0), 1.0, 600.0);
+    wasapi::CaptureStream cap;
+    const auto fmt = cap.open(dev, loop, kRate);
+    const std::size_t C = fmt.channels, want = static_cast<std::size_t>(seconds * kRate);
+    AudioBuffer buf;
+    buf.sampleRate = kRate;
+    buf.channelMask = fmt.channelMask;
+    buf.resize(C, want);
+    std::atomic<std::size_t> got{0};
+    std::printf("recording %.0f s from %s'%s' (%zu ch, mask 0x%X)... play the game now\n", seconds,
+                loop ? "loopback of " : "", dev.name.c_str(), C, fmt.channelMask);
+    cap.start([&](const float* d, std::size_t n, bool silent, std::uint64_t) {
+        std::size_t g = got.load();
+        const std::size_t take = std::min(n, want - g);
+        for (std::size_t i = 0; i < take; ++i)
+            for (std::size_t c = 0; c < C; ++c) buf.channels[c][g + i] = silent ? 0.0f : d[i * C + c];
+        got = g + take;
+    });
+    const auto t0 = Clock::now();
+    while (got.load() < want && !g_stop && !cap.failed()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Loopback delivers nothing while the device is idle: count silence by the clock.
+        if (loop && Clock::now() - t0 > std::chrono::duration<double>(seconds + 2.0)) break;
+    }
+    cap.stop();
+    if (cap.failed()) throw std::runtime_error(cap.error());
+    // Loopback skips silence; the rest of the buffer is already zeros.
+    if (!loop) for (auto& ch : buf.channels) ch.resize(got.load());
+    if (got.load() == 0) std::printf("note: nothing was playing on this device\n");
+    const std::string out = a.positional[0];
+    writeWav(out, buf, WavSampleFormat::Float32);
+    std::printf("saved %s\n\n", out.c_str());
+    return reportChannels(buf);
+}
+
+int cmdChannels(const Args& a) {
+    if (a.positional.empty()) {
+        std::fprintf(stderr, "usage: tacaudio channels <file.wav>\n");
+        return 2;
+    }
+    return reportChannels(readWav(a.positional[0]));
+}
+
 int cmdCableTest(const Args& a) {
     wasapi::ComScope com;
     const auto dev = requireDevice(a.get("--device", "CABLE Input"), true);
@@ -585,6 +710,8 @@ int main(int argc, char** argv) {
                                    "--no-low-latency", "--exclusive", "--raw-hrtf"});
         if (cmd == "devices") return cmdDevices();
         if (cmd == "cable-test") return cmdCableTest(a);
+        if (cmd == "record") return cmdRecord(a);
+        if (cmd == "channels") return cmdChannels(a);
         if (cmd == "run") return cmdRun(a);
         return usage();
     } catch (const std::exception& e) {

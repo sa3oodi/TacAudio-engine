@@ -124,6 +124,7 @@ std::uint32_t maskFor(std::uint32_t channels, std::uint32_t mask) {
         case 4: return KSAUDIO_SPEAKER_QUAD;
         case 6: return KSAUDIO_SPEAKER_5POINT1_SURROUND;
         case 8: return KSAUDIO_SPEAKER_7POINT1_SURROUND;
+        case 12: return 0x2D63F;  // 7.1.4: + TFL TFR TBL TBR
         default: return 0;
     }
 }
