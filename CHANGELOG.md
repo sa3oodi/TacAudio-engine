@@ -4,6 +4,15 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.5 - 2026-11-14
+
+### New
+- Update now: TacAudio downloads the new version, checks that the download is complete and genuine, installs it and reopens by itself.
+
+### Improved
+- Clean updates: the old app files and the old engine in Windows audio are removed and the new version is installed fresh (one Windows prompt if the engine is installed). Your settings, game profiles and headphone EQ are kept.
+- Installing or updating the engine works even while Windows audio is using it, and with non-English device or user names.
+
 ## 0.7.4 - 2026-11-14
 
 ### Improved

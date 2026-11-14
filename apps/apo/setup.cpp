@@ -3,6 +3,9 @@
 //   tacapo-setup status
 //   tacapo-setup install --device "Game" [--channels 8] [--log <file>]     (administrator)
 //   tacapo-setup uninstall [--log <file>]                                  (administrator)
+//   tacapo-setup reinstall [--log <file>]                                  (administrator)
+//     clean update: removes the engine completely, then installs this version's engine on the
+//     same device(s) again (used by the app installer after an update)
 //   tacapo-setup set-channels <n> [--log <file>]                           (administrator)
 //
 // install: copies TacAudioApo.dll to %ProgramFiles%\TacAudio\apo, registers it, gives the audio
@@ -11,6 +14,7 @@
 // restarts the Windows audio service. uninstall puts every backed-up value back exactly.
 
 #include <windows.h>
+#include <shellapi.h>
 #include <mmreg.h>
 #include <ks.h>
 #include <ksmedia.h>
@@ -47,6 +51,14 @@ std::string narrow(const std::wstring& w) {
     std::string s(static_cast<size_t>(n), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
     return s;
+}
+
+std::wstring widen(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), w.data(), n);
+    return w;
 }
 
 [[noreturn]] void fail(const std::string& msg) {
@@ -198,11 +210,38 @@ void requireAdmin() {
     if (!isAdmin()) fail("this command needs administrator rights (run it from an elevated prompt)");
 }
 
+// Puts src at dst even while dst is loaded by audiodg: a loaded DLL cannot be overwritten but can
+// be renamed, so the old file moves aside (deleted now if possible, else at the next restart).
+void replaceFile(const fs::path& src, const fs::path& dst) {
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dst.parent_path(), ec))  // leftovers from earlier updates
+        if (e.path().filename().wstring().rfind(dst.filename().wstring() + L".old", 0) == 0) fs::remove(e.path(), ec);
+    if (fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) return;
+    const std::string first = ec.message();
+    if (fs::exists(dst)) {
+        const fs::path old = dst.wstring() + L".old" + std::to_wstring(GetTickCount64());
+        if (!MoveFileExW(dst.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING))
+            fail("cannot replace " + narrow(dst.wstring()) + ": " + first + " (rename failed, error " +
+                 std::to_string(GetLastError()) + ")");
+        std::printf("in use   : old %s moved aside\n", narrow(dst.filename().wstring()).c_str());
+        if (!DeleteFileW(old.c_str())) MoveFileExW(old.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
+    if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec))
+        fail("cannot copy " + narrow(src.wstring()) + " to " + narrow(dst.wstring()) + ": " + ec.message());
+}
+
 // ------------------------------------------------------------------ commands
 int cmdInstall(const std::string& device, DWORD channels) {
     requireAdmin();
     tac::wasapi::ComScope com;
-    const auto dev = tac::wasapi::findDevice(device, true);
+    std::optional<tac::wasapi::DeviceInfo> dev;
+    if (device.rfind("id:", 0) == 0) {  // endpoint GUID (reinstall)
+        const std::wstring want = widen(device.substr(3));
+        for (const auto& d : tac::wasapi::listDevices(true))
+            if (d.id.size() >= want.size() && _wcsicmp(d.id.c_str() + d.id.size() - want.size(), want.c_str()) == 0) dev = d;
+    } else {
+        dev = tac::wasapi::findDevice(device, true);
+    }
     if (!dev) fail("no playback device matches '" + device + "'");
     const auto dot = dev->id.rfind(L'.');
     if (dot == std::wstring::npos) fail("unexpected device id");
@@ -215,13 +254,7 @@ int cmdInstall(const std::string& device, DWORD channels) {
     if (!fs::exists(src)) fail("TacAudioApo.dll not found next to tacapo-setup.exe");
     fs::create_directories(dstDir);
     std::error_code ec;
-    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    if (ec) {  // loaded by audiodg: stop audio, copy, the restart below brings it back
-        std::printf("DLL in use - stopping audio to replace it\n");
-        restartAudio();
-        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-        if (ec) fail("cannot copy the DLL: " + ec.message());
-    }
+    replaceFile(src, dst);  // the audio restart at the end loads the new one
     std::printf("copied   : %s\n", narrow(dst.wstring()).c_str());
 
     // 1b) Head (HRTF) files next to the DLL: hrtf/MIT KEMAR + hrtf/sadie2/{D1,D2}.sofa.
@@ -287,7 +320,7 @@ int cmdInstall(const std::string& device, DWORD channels) {
     return 0;
 }
 
-int cmdUninstall() {
+int cmdUninstall(bool scheduleLeftovers = true) {
     requireAdmin();
     int restored = 0;
     for (const auto& name : valueNames(kBackupKey)) {  // "<endpoint guid>|<slot>" (or just the guid: SFX slot)
@@ -317,8 +350,54 @@ int cmdUninstall() {
     RegDeleteTreeW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\TacAudio\\Apo");
     std::error_code ec;
     fs::remove_all(installDir(), ec);
-    if (ec) std::printf("note: could not delete %s yet (%s)\n", narrow(installDir().wstring()).c_str(), ec.message().c_str());
+    if (ec && !scheduleLeftovers) {
+        std::printf("note: some old files are still in use (%s) - they are replaced next\n", ec.message().c_str());
+    } else if (ec) {
+        std::printf("note: could not delete %s yet (%s) - it goes at the next restart\n",
+                    narrow(installDir().wstring()).c_str(), ec.message().c_str());
+        for (const auto& e : fs::recursive_directory_iterator(installDir(), ec))
+            if (e.is_regular_file(ec)) MoveFileExW(e.path().c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
     std::printf("\nUninstalled (%d device setting(s) restored).\n", restored);
+    return 0;
+}
+
+// Clean update: remember which device(s) have the engine, remove it completely (device settings
+// restored, registration and files deleted), then install this version's engine on them again.
+int cmdReinstall() {
+    requireAdmin();
+    tac::wasapi::ComScope com;
+    std::vector<std::wstring> guids;
+    for (const auto& guid : subkeys(kRenderKey)) {
+        const std::wstring fx = std::wstring(kRenderKey) + L"\\" + guid + L"\\FxProperties";
+        for (const wchar_t* slot : kSlots)
+            if (readString(HKEY_LOCAL_MACHINE, fx, slot) == kClsid) {
+                guids.push_back(guid);
+                break;
+            }
+    }
+    DWORD channels = 8, size = sizeof(channels);
+    RegGetValueW(HKEY_LOCAL_MACHINE, kConfigKey, L"InputChannels", RRF_RT_REG_DWORD, nullptr, &channels, &size);
+    if (guids.empty()) {
+        std::printf("The engine is not on any device - nothing to reinstall.\n");
+        return 0;
+    }
+    std::printf("== Removing the old engine\n");
+    cmdUninstall(false);
+    int installed = 0;
+    for (const auto& guid : guids) {
+        std::printf("\n== Installing the new engine on %s\n", narrow(endpointName(guid)).c_str());
+        bool active = false;
+        for (const auto& d : tac::wasapi::listDevices(true))
+            active |= d.id.size() >= guid.size() && _wcsicmp(d.id.c_str() + d.id.size() - guid.size(), guid.c_str()) == 0;
+        if (!active) {
+            std::printf("skipped  : device not connected - install it from the app's Setup page later\n");
+            continue;
+        }
+        cmdInstall("id:" + narrow(guid), channels);
+        ++installed;
+    }
+    std::printf("\nReinstalled on %d device(s).\n", installed);
     return 0;
 }
 
@@ -496,8 +575,16 @@ int cmdSelfTest() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    std::vector<std::string> a(argv + 1, argv + argc);
+int main() {
+    // Arguments as UTF-8 (argv is in the ANSI code page, which breaks device names such as
+    // "Realtek(R)" or non-English ones, and user folders with non-ASCII names).
+    std::vector<std::string> a;
+    {
+        int n = 0;
+        wchar_t** w = CommandLineToArgvW(GetCommandLineW(), &n);
+        for (int i = 1; w && i < n; ++i) a.push_back(narrow(w[i]));
+        if (w) LocalFree(w);
+    }
     auto opt = [&](const char* name, const std::string& def) {
         for (size_t i = 0; i + 1 < a.size(); ++i)
             if (a[i] == name) return a[i + 1];
@@ -506,7 +593,7 @@ int main(int argc, char** argv) {
     const std::string log = opt("--log", "");
     if (!log.empty()) {
         FILE* f = nullptr;
-        freopen_s(&f, log.c_str(), "w", stdout);
+        _wfreopen_s(&f, widen(log).c_str(), L"w", stdout);
     }
     try {
         const std::string cmd = a.empty() ? "" : a[0];
@@ -520,8 +607,9 @@ int main(int argc, char** argv) {
         }
         if (cmd == "install") return cmdInstall(opt("--device", "Game"), static_cast<DWORD>(std::stoul(opt("--channels", "8"))));
         if (cmd == "uninstall") return cmdUninstall();
+        if (cmd == "reinstall") return cmdReinstall();
         if (cmd == "set-channels" && a.size() > 1) return cmdSetChannels(static_cast<DWORD>(std::stoul(a[1])));
-        std::printf("usage: tacapo-setup status | install --device <name> [--channels 8] | uninstall | set-channels <n>\n");
+        std::printf("usage: tacapo-setup status | install --device <name> [--channels 8] | uninstall | reinstall | set-channels <n>\n");
         return 2;
     } catch (const std::exception& e) {
         fail(e.what());

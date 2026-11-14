@@ -436,6 +436,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             if (!g_visible && !smoke) {  // tray mode: no rendering, just keep the engine supervised
                 MsgWaitForMultipleObjects(0, nullptr, FALSE, app.wantsFastTick() ? 30 : 100, QS_ALLINPUT);
                 app.tick();
+                if (app.wantsQuit()) break;  // "Update now": the installer takes over
                 continue;
             }
             if (smoke && ++frames > smokeFrames) break;  // enough frames for animations to settle
@@ -449,6 +450,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
             app.frame();
+            if (app.wantsQuit()) {  // "Update now": the installer takes over
+                ImGui::EndFrame();
+                break;
+            }
             ImGui::Render();
             const float clear[4] = {0.05f, 0.06f, 0.08f, 1.0f};
             g_context->OMSetRenderTargets(1, &g_rtv, nullptr);

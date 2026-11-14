@@ -770,14 +770,18 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Accent, 0.14f), S(8));
         dl->AddText(fonts.regular, S(15), up + ImVec2(S(14), S(12)), col::Accent, icon::Refresh);
         char b[160];
-        std::snprintf(b, sizeof(b), "TacAudio %s is available - you have %s. Your settings and profiles are kept.",
-                      update_->version.c_str(), TAC_VERSION);
-        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text, b);
-        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
-        if (pillButton("Download", col::Accent, IM_COL32(20, 14, 8, 255), S(140)))
-            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if (dlJob_.valid())
+            std::snprintf(b, sizeof(b), "Downloading TacAudio %s... %.0f%%", update_->version.c_str(), dlProgress_->load() * 100.0f);
+        else if (!dlError_.empty())
+            std::snprintf(b, sizeof(b), "Update failed: %s", dlError_.c_str());
+        else
+            std::snprintf(b, sizeof(b), "TacAudio %s is available - you have %s. Your settings, profiles and EQ are kept.",
+                          update_->version.c_str(), TAC_VERSION);
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), dlError_.empty() ? col::Text : col::Red, b);
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(170), S(4)));
+        updateButton(S(160));
         ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34), S(7)));
-        if (iconButton("##updclose", "\xEE\x9C\x91", "Remind me later", true, 28)) updDismissed_ = true;  // U+E711
+        if (!dlJob_.valid() && iconButton("##updclose", "\xEE\x9C\x91", "Remind me later", true, 28)) updDismissed_ = true;  // U+E711
         ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
     }
     ImGui::Dummy(ImVec2(0, 0));
@@ -1208,8 +1212,12 @@ void App::pageSettings() {
     ui::text(updStatus_.empty() ? "Version " TAC_VERSION : updStatus_.c_str(), update_ ? col::Accent : col::Dim, 13.0f);
     if (update_) {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
-        if (pillButton("Open download page", col::Accent, IM_COL32(20, 14, 8, 255), S(190)))
-            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        updateButton(S(190));
+        if (!dlError_.empty()) {
+            ImGui::SameLine(0, S(14));
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + S(8));
+            ui::text(("Update failed: " + dlError_).c_str(), col::Red, 13.0f);
+        }
     }
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
@@ -1858,6 +1866,64 @@ void App::pageHeadTest() {
 }
 
 // ------------------------------------------------------------------ Update check
+void App::updateButton(float width) {
+    if (!update_) return;
+    if (dlJob_.valid()) {  // downloading: a progress bar in place of the button
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float h = S(34), r = h * 0.5f;
+        ImDrawList* d = ImGui::GetWindowDrawList();
+        d->AddRectFilled(p, p + ImVec2(width, h), col::CardHi, r);
+        d->AddRectFilled(p, p + ImVec2(std::max(h, width * dlProgress_->load()), h), withAlpha(col::Accent, 0.85f), r);
+        ImGui::Dummy(ImVec2(width, h));
+        return;
+    }
+    if (!update_->canInstall()) {  // release without an installer checksum: the page instead
+        if (pillButton("Open download page", col::Accent, IM_COL32(20, 14, 8, 255), width))
+            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return;
+    }
+    if (pillButton(dlError_.empty() ? "Update now" : "Try again", col::Accent, IM_COL32(20, 14, 8, 255), width)) startUpdate();
+    if (ImGui::IsItemHovered())
+        tooltip("Downloads the new version, checks it, and installs it cleanly: old files and the old engine are "
+                "removed, your settings, profiles and EQ are kept. TacAudio reopens by itself.");
+}
+
+void App::startUpdate() {
+    if (preview_ || !update_ || !update_->canInstall() || dlJob_.valid()) return;
+    dlError_.clear();
+    *dlProgress_ = 0.0f;
+    const ReleaseInfo r = *update_;
+    const auto file = std::filesystem::temp_directory_path() / ("TacAudio-Setup-" + r.version + ".exe");
+    auto progress = dlProgress_;
+    dlJob_ = std::async(std::launch::async, [r, file, progress]() -> std::string {
+        try {
+            downloadInstaller(r, file, *progress);
+            return {};
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+    });
+}
+
+void App::pollUpdate() {
+    if (!dlJob_.valid() || dlJob_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    dlError_ = dlJob_.get();
+    if (!dlError_.empty() || !update_) return;
+    // Save everything first: the installer closes TacAudio and opens the new version afterwards.
+    saveSettings(cfg_);
+    profiles_[static_cast<std::size_t>(activeProfile_)].bundle = bundleOf(cfg_);
+    saveProfiles(profiles_);
+    const auto file = std::filesystem::temp_directory_path() / ("TacAudio-Setup-" + update_->version + ".exe");
+    // /SILENT: progress window only. /update=1: the installer reopens TacAudio when it is done.
+    const auto res = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", file.c_str(),
+        L"/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /update=1", nullptr, SW_SHOWNORMAL));
+    if (res <= 32) {
+        dlError_ = "could not start the installer";
+        return;
+    }
+    quit_ = true;
+}
+
 void App::checkUpdatesNow() {
     if (preview_ || updJob_.valid()) return;
     updStatus_ = "Checking...";
@@ -1866,6 +1932,7 @@ void App::checkUpdatesNow() {
 
 void App::pollUpdates() {
     using namespace std::chrono;
+    pollUpdate();
     if (updJob_.valid() && updJob_.wait_for(seconds(0)) == std::future_status::ready) {
         try {
             const ReleaseInfo r = updJob_.get();

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(TacAudio VERSION 0.7.4 LANGUAGES CXX)
+project(TacAudio VERSION 0.7.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -149,7 +149,7 @@ if(WIN32)
             apps/tacaudio_gui/profiles.cpp apps/tacaudio_gui/game_library.cpp apps/tacaudio_gui/update_check.cpp
             apps/tacaudio_gui/head_test.cpp apps/tacaudio_gui/overlay.cpp
             ${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc)
-        target_link_libraries(tacaudio_gui PRIVATE tac_session tac_imgui shell32 comdlg32 windowscodecs winhttp)
+        target_link_libraries(tacaudio_gui PRIVATE tac_session tac_imgui shell32 comdlg32 windowscodecs winhttp bcrypt)
         target_compile_definitions(tacaudio_gui PRIVATE TAC_VERSION="${PROJECT_VERSION}")
         set_target_properties(tacaudio_gui PROPERTIES OUTPUT_NAME TacAudio)
         if(TAC_WITH_SOFA)  # the GUI finds hrtf/ next to its exe, like tacrender

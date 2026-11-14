@@ -86,6 +86,7 @@ public:
     bool closeToTray() const { return cfg_.closeToTray; }
     bool hotkeysEnabled() const { return cfg_.hotkeys; }
     std::string trayTooltip() const;
+    bool wantsQuit() const { return quit_; }  // the updater started the installer: exit now
 
     static constexpr const char* kHotkeyPower = "Ctrl + Alt + F10";
     static constexpr const char* kHotkey3d = "Ctrl + Alt + F9";
@@ -116,6 +117,9 @@ private:
     void pollUpdates();
     void pollOverlay();
     void checkUpdatesNow();
+    void startUpdate();     // "Update now"
+    void pollUpdate();      // download finished: run the installer and quit
+    void updateButton(float width);  // "Update now" / progress / "Open download page"
     void activateProfile(int index);
     int profileForGame(const GameEntry& g) const;
     int findProfile(const std::string& exe, const std::string& path) const;
@@ -230,6 +234,11 @@ private:
     std::optional<ReleaseInfo> update_;    // a newer release than this build
     std::string updStatus_;
     bool updDismissed_ = false;
+    // "Update now": download the installer, check it, run it silently, quit (it reopens TacAudio).
+    std::future<std::string> dlJob_;       // "" = downloaded and checked, else the error
+    std::shared_ptr<std::atomic<float>> dlProgress_ = std::make_shared<std::atomic<float>>(0.0f);
+    std::string dlError_;
+    bool quit_ = false;
     std::chrono::steady_clock::time_point nextUpdCheck_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 };
 

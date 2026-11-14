@@ -1,10 +1,12 @@
 #include "update_check.h"
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
 #include <vector>
 
 #include <windows.h>
+#include <bcrypt.h>
 #include <winhttp.h>
 
 namespace tac {
@@ -12,6 +14,7 @@ namespace tac {
 namespace {
 constexpr const wchar_t* kHost = L"api.github.com";
 constexpr const wchar_t* kPath = L"/repos/sa3oodi/TacAudio-engine/releases/latest";
+constexpr const char* kDownloadPrefix = "https://github.com/sa3oodi/TacAudio-engine/releases/download/";
 
 struct Handle {
     HINTERNET h = nullptr;
@@ -102,7 +105,109 @@ ReleaseInfo fetchLatestRelease() {
     r.url = jsonField(body, "html_url");
     if (r.version.empty()) throw std::runtime_error("unexpected answer from GitHub");
     if (r.url.rfind("https://github.com/", 0) != 0) r.url = "https://github.com/sa3oodi/TacAudio-engine/releases/latest";
+    // The installer asset (only from this project's own releases) and GitHub's checksum of it.
+    const std::string asset = jsonField(body, "browser_download_url");
+    if (asset.rfind(kDownloadPrefix, 0) == 0 && asset.size() > 4 && asset.compare(asset.size() - 4, 4, ".exe") == 0)
+        r.installerUrl = asset;
+    std::string digest = jsonField(body, "digest");
+    if (digest.rfind("sha256:", 0) == 0) {
+        digest.erase(0, 7);
+        std::transform(digest.begin(), digest.end(), digest.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (digest.size() == 64 && digest.find_first_not_of("0123456789abcdef") == std::string::npos) r.installerSha256 = digest;
+    }
     return r;
+}
+
+std::string sha256File(const std::filesystem::path& file) {
+    std::ifstream f(file, std::ios::binary);
+    if (!f) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return {};
+    std::string out;
+    if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
+        std::vector<char> buf(1 << 16);
+        bool ok = true;
+        while (ok && f) {
+            f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const auto n = static_cast<ULONG>(f.gcount());
+            if (n) ok = BCryptHashData(hash, reinterpret_cast<PUCHAR>(buf.data()), n, 0) == 0;
+        }
+        unsigned char digest[32];
+        if (ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0) {
+            static const char* hex = "0123456789abcdef";
+            for (unsigned char b : digest) {
+                out += hex[b >> 4];
+                out += hex[b & 15];
+            }
+        }
+        BCryptDestroyHash(hash);
+    }
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return out;
+}
+
+void downloadInstaller(const ReleaseInfo& r, const std::filesystem::path& file, std::atomic<float>& progress) {
+    if (!r.canInstall()) throw std::runtime_error("this release has no installer to download");
+    progress = 0.0f;
+    std::wstring url(r.installerUrl.begin(), r.installerUrl.end());  // ASCII (checked prefix)
+    URL_COMPONENTS uc{sizeof(uc)};
+    wchar_t host[256] = {}, path[2048] = {};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = 256;
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = 2048;
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc) || uc.nScheme != INTERNET_SCHEME_HTTPS)
+        throw std::runtime_error("unexpected download address");
+    Handle session(WinHttpOpen(L"TacAudio-updater", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0));
+    if (!session.h) throw std::runtime_error("no internet access");
+    WinHttpSetTimeouts(session.h, 10000, 10000, 15000, 30000);
+    Handle conn(WinHttpConnect(session.h, host, uc.nPort, 0));
+    if (!conn.h) throw std::runtime_error("cannot reach GitHub");
+    Handle req(WinHttpOpenRequest(conn.h, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                  WINHTTP_FLAG_SECURE));
+    if (!req.h) throw std::runtime_error("cannot reach GitHub");
+    // GitHub redirects release downloads to its file servers (HTTPS only - WinHTTP never follows
+    // a redirect from HTTPS to HTTP by default).
+    if (!WinHttpSendRequest(req.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(req.h, nullptr))
+        throw std::runtime_error("download failed (offline?)");
+    DWORD status = 0, size = sizeof(status);
+    WinHttpQueryHeaders(req.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status,
+                        &size, WINHTTP_NO_HEADER_INDEX);
+    if (status != 200) throw std::runtime_error("download failed (GitHub answered " + std::to_string(status) + ")");
+    DWORD total = 0;
+    size = sizeof(total);
+    WinHttpQueryHeaders(req.h, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &total,
+                        &size, WINHTTP_NO_HEADER_INDEX);
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+    {
+        std::ofstream out(file, std::ios::binary | std::ios::trunc);
+        if (!out) throw std::runtime_error("cannot write the download to the temp folder");
+        std::vector<char> buf(1 << 16);
+        unsigned long long got = 0;
+        for (;;) {
+            DWORD n = 0;
+            if (!WinHttpReadData(req.h, buf.data(), static_cast<DWORD>(buf.size()), &n)) {
+                out.close();
+                std::filesystem::remove(file, ec);
+                throw std::runtime_error("download interrupted");
+            }
+            if (n == 0) break;
+            out.write(buf.data(), n);
+            got += n;
+            if (got > (512ull << 20)) throw std::runtime_error("download too large");
+            if (total) progress = static_cast<float>(static_cast<double>(got) / total) * 0.98f;
+        }
+        if (!out) throw std::runtime_error("cannot write the download to the temp folder");
+    }
+    if (sha256File(file) != r.installerSha256) {
+        std::filesystem::remove(file, ec);
+        throw std::runtime_error("the download is damaged (checksum does not match) - try again");
+    }
+    progress = 1.0f;
 }
 
 }  // namespace tac
