@@ -62,7 +62,7 @@ icon and hotkeys.
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.7.0.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+1. Download **`TacAudio-Setup-0.7.1.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
 2. Run it. It installs for your user only into `%LOCALAPPDATA%\Programs\TacAudio`, with a Start
    menu entry and an uninstaller in *Settings &rarr; Apps*.
 
