@@ -49,6 +49,13 @@ struct DynamicsParams {
     float footstepHz = 3500.0f;
     float footstepQ = 0.8f;
     float footstepBelowDb = -30.0f;
+    // Smart footsteps: the band boost only follows short impacts in the band (steps, landings,
+    // reloads) - it rises when the band's level jumps above its recent background and holds for
+    // the length of a step. Steady sounds in the same band (rain, wind, engines) get no boost.
+    bool footstepSmart = false;
+    float smartOnsetDb = 3.0f;    // jump above the background where the boost starts...
+    float smartFullDb = 9.0f;     // ...and where it is complete
+    float smartHoldMs = 90.0f;    // boost release after an impact (one footstep)
 
     bool active() const noexcept { return enabled || footstepDb > 0.0f; }
 };
@@ -80,12 +87,16 @@ private:
         float gainDb = 0.0f;  // smoothed gain
         Biquad band;          // footstep band (0 dB peak band-pass)
         float stepGain = 0.0f;  // smoothed linear extra gain for the band
+        Biquad detBand;         // smart: same band on the undelayed input (detector)
+        float bandFast = 0.0f, bandSlow = 0.0f;  // smart: band energy, ~5 ms and ~250 ms
+        float impact = 0.0f;    // smart: 0..1 "an impact is happening" (held for a step)
     };
     DynamicsParams p_;
     std::size_t lookahead_;
     std::size_t pos_ = 0;
     float detRelease_, msCoef_, peakMix_, attCoef_, relCoef_, makeup_;
-    float stepMax_ = 0.0f, stepCoef_ = 0.0f;
+    float stepMax_ = 0.0f, stepAtt_ = 0.0f, stepRel_ = 0.0f;
+    float fastCoef_ = 0.0f, slowCoef_ = 0.0f, impAtt_ = 0.0f, impRel_ = 0.0f;
     std::vector<Channel> ch_;
     float minGainDb_ = 0.0f, maxGainDb_ = 0.0f;
 };

@@ -20,7 +20,6 @@
 #include "core/biquad.h"
 #include "core/dynamics.h"
 #include "core/headphone_eq.h"
-#include "core/patch_notes.h"
 #include "core/layout.h"
 #include "core/wav.h"
 #include "platform/wasapi.h"
@@ -103,10 +102,10 @@ AppSettings loadSettings() {
             else if (k == "stepsOn") s.stepsOn = v == "1";
             else if (k == "stepsLevel") s.stepsLevel = std::stof(v);
             else if (k == "bass") s.sound.bassDb = std::stof(v);
+            else if (k == "stepsSmart") s.stepsSmart = v == "1";
             else if (k == "eqOn") s.eqOn = v == "1";
             else if (k == "eq") s.eqText = v;
             else if (k == "eqName") s.eqName = v;
-            else if (k == "lastVersion") s.lastVersion = v;
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
@@ -164,13 +163,13 @@ void saveSettings(const AppSettings& s) {
       << "\nhead=" << s.sound.head << "\nroom=" << s.sound.room << "\npunch=" << s.sound.punch
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
-      << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
+      << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
       << "\neqName=" << s.eqName << "\noverlayOn=" << (s.overlayOn ? 1 : 0) << "\noverlaySize=" << s.overlaySize
       << "\noverlayOpacity=" << s.overlayOpacity << "\noverlayPos=" << s.overlayPos
-      << "\noverlayLevel=" << s.overlayLevel << "\nlastVersion=" << s.lastVersion << "\n";
+      << "\noverlayLevel=" << s.overlayLevel << "\n";
 }
 
 namespace {
@@ -181,6 +180,7 @@ SoundBundle bundleOf(const AppSettings& s) {
     b.dynPreset = s.dynPreset;
     b.stepsOn = s.stepsOn;
     b.stepsLevel = s.stepsLevel;
+    b.stepsSmart = s.stepsSmart;
     return b;
 }
 void applyBundle(AppSettings& s, const SoundBundle& b) {
@@ -189,6 +189,7 @@ void applyBundle(AppSettings& s, const SoundBundle& b) {
     s.dynPreset = b.dynPreset;
     s.stepsOn = b.stepsOn;
     s.stepsLevel = b.stepsLevel;
+    s.stepsSmart = b.stepsSmart;
 }
 }  // namespace
 
@@ -198,16 +199,6 @@ App::App(bool previewRunning) : preview_(previewRunning) {
     // Game profiles: start on Default (a game profile is picked once its game is in front).
     profiles_ = loadProfiles(bundleOf(cfg_));
     applyBundle(cfg_, profiles_.front().bundle);
-    // Patch notes built into the exe; after an update, offer this version's notes once.
-    if (HRSRC r = FindResourceW(nullptr, MAKEINTRESOURCEW(200), MAKEINTRESOURCEW(10) /*RT_RCDATA*/)) {
-        if (HGLOBAL g = LoadResource(nullptr, r)) {
-            const char* p = static_cast<const char*>(LockResource(g));
-            if (p) notes_ = parsePatchNotes(std::string(p, SizeofResource(nullptr, r)));
-        }
-    }
-    // Updated: the notes seen last are older, or an install from before patch notes existed.
-    justUpdated_ = !preview_ && (cfg_.lastVersion.empty() ? cfg_.setupDone : isNewerVersion(TAC_VERSION, cfg_.lastVersion));
-    if (!justUpdated_) cfg_.lastVersion = TAC_VERSION;
     saved_ = cfg_;
     lastStatus_ = lastSave_ = std::chrono::steady_clock::now();
     {  // dev check of the listening test without sound on the headphones (smoke test only)
@@ -310,13 +301,6 @@ App::App(bool previewRunning) : preview_(previewRunning) {
             for (int i = 0; i < 20; ++i) dirField_.updateWeights(pk, az, lf, 8, 0.1f);
             wchar_t ov[MAX_PATH] = {};  // dev: TACAUDIO_PREVIEW_OVERLAY=<file.bmp> saves the ring bitmap
             if (GetEnvironmentVariableW(L"TACAUDIO_PREVIEW_OVERLAY", ov, MAX_PATH)) overlay_.saveBitmap(dirField_, 140, 0.8f, ov);
-        }
-        if (GetEnvironmentVariableA("TACAUDIO_PREVIEW_NOTES", nullptr, 0)) {  // dev: update + "updated" banners
-            justUpdated_ = true;
-            update_ = ReleaseInfo{"9.9.9", "https://github.com/sa3oodi/TacAudio-engine/releases/latest",
-                                  "### New\n- A sample feature from the next release.\n### Fixed\n- A sample fix.\n"
-                                  "### Install\n- Download the installer below."};
-            updNotes_ = parsePatchNotes(update_->notes);
         }
         cfg_.eqOn = true;  // sample correction curve for the Devices page
         cfg_.eqName = "Example headphones";
@@ -545,10 +529,10 @@ std::string App::apoIniText() const {
     char b[512];
     std::snprintf(b, sizeof(b),
                   "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
-                  "stepsLevel=%g\nbass=%g\n",
+                  "stepsLevel=%g\nstepsSmart=%d\nbass=%g\n",
                   wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
                   cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
-                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.sound.bassDb);
+                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
     return std::string(b) + "eq=" + cfg_.effective().eq + "\ncapture=" + std::to_string(std::max(0, captureId_)) + "\n";
 }
 
@@ -557,7 +541,7 @@ void App::pollDirect() {
     if (apoJob_.valid() && apoJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const int code = apoJob_.get();
         apoMsg_ = code == 0 ? std::string() : code < 0 ? "Cancelled - administrator permission is needed."
-                                                       : "Something went wrong - click Details to see why.";
+                                                       : "Something went wrong - details in %TEMP%\\tacapo_setup.txt";
         refreshDevices();
         engineOutdated_ = direct_ && apoctl::engineOutdated();
         lastApoIni_.clear();  // re-send the settings to a fresh install
@@ -596,11 +580,6 @@ void App::pollDirect() {
     status_.engine.running = wantRunning_ && now - audioSeen_ < std::chrono::seconds(2);
     status_.source = now - surroundSeen_ < std::chrono::seconds(15) ? "Game audio: 7.1 surround" : "Game audio: stereo";
     status_.output = cfg_.dev.output + " (Direct mode)";
-}
-
-void App::openSetupLog() {
-    const auto log = std::filesystem::temp_directory_path() / "tacapo_setup.txt";
-    ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + log.wstring() + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 void App::runApoSetup(const char* label, std::vector<std::wstring> args) {
@@ -650,7 +629,6 @@ void App::frame() {
         case kPageSetup: pageSetup(); break;
         case kPageProfiles: pageProfiles(); break;
         case kPageHeadTest: pageHeadTest(); break;
-        case kPageNotes: pageNotes(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -687,8 +665,7 @@ void App::sidebar() {
     const char* labels[] = {"Sound", "Profiles", "Devices", "Setup", "Performance", "Settings", "About"};
     const int pages[] = {0, kPageProfiles, 1, kPageSetup, 2, 3, 4};
     for (int i = 0; i < 7; ++i)
-        if (navItem(glyphs[i], labels[i], (page_ == kPageHeadTest ? 0 : page_ == kPageNotes ? 4 : page_) == pages[i]))
-            page_ = pages[i];
+        if (navItem(glyphs[i], labels[i], (page_ == kPageHeadTest ? 0 : page_) == pages[i])) page_ = pages[i];
 
     // Engine status at the bottom of the sidebar.
     const float h = ImGui::GetWindowHeight();
@@ -779,35 +756,12 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         const ImVec2 up = ImGui::GetCursorScreenPos();
         const float h = S(42);
         dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Teal, 0.12f), S(8));
-        const bool failed = !apoJob_.valid() && !apoMsg_.empty();
-        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(14), S(12)), failed ? col::Red : col::Text,
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(14), S(12)), col::Text,
                     apoJob_.valid() ? "Updating the engine... (approve the Windows prompt; sound pauses for a few seconds)"
-                    : failed        ? apoMsg_.c_str()
                                     : "TacAudio was updated - update its engine in Windows audio to get the new sound features.");
-        if (failed && apoMsg_.rfind("Cancelled", 0) != 0) {
-            ImGui::SetCursorScreenPos(up + ImVec2(avail - S(170) - S(130), S(4)));
-            if (actionButton("Details", false, true, S(120))) openSetupLog();
-        }
         ImGui::SetCursorScreenPos(up + ImVec2(avail - S(170), S(4)));
-        if (actionButton(failed ? "Try again" : "Update engine", true, !apoJob_.valid(), S(160)))
+        if (actionButton("Update engine", true, !apoJob_.valid(), S(160)))
             runApoSetup("Installing", {L"install", L"--device", fromUtf8(cfg_.dev.output)});
-        ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
-    }
-    if (justUpdated_) {  // first start after an update: offer this version's notes
-        const ImVec2 up = ImGui::GetCursorScreenPos();
-        const float h = S(42);
-        dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Teal, 0.12f), S(8));
-        dl->AddText(fonts.regular, S(15), up + ImVec2(S(14), S(12)), col::Teal, icon::Info);
-        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text,
-                    "TacAudio was updated to " TAC_VERSION " - see what's new and what was fixed.");
-        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
-        if (pillButton("What's new", col::Teal, IM_COL32(8, 20, 18, 255), S(140))) openNotes();
-        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34), S(7)));
-        if (iconButton("##notesclose", "\xEE\x9C\x91", "Close", true, 28)) {  // U+E711
-            justUpdated_ = false;
-            cfg_.lastVersion = TAC_VERSION;
-            if (!preview_) saveSettings(cfg_);
-        }
         ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
     }
     if (update_ && !updDismissed_) {  // a newer release is out
@@ -819,8 +773,6 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         std::snprintf(b, sizeof(b), "TacAudio %s is available - you have %s. Your settings and profiles are kept.",
                       update_->version.c_str(), TAC_VERSION);
         dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text, b);
-        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150) - S(140), S(4)));
-        if (pillButton("What's new", col::CardHi, col::Text, S(130))) page_ = kPageNotes;
         ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
         if (pillButton("Download", col::Accent, IM_COL32(20, 14, 8, 255), S(140)))
             ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -834,12 +786,7 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
 
 // ------------------------------------------------------------------ Sound page
 void App::pageSound() {
-    AppSettings def;
-    {  // with a headphone EQ, Volume and Bass default to what suits those headphones
-        const HeadphoneEq::Suggestion hp = headphoneDefaults();
-        def.sound.volumeDb = hp.volumeDb;
-        def.sound.bassDb = hp.bassDb;
-    }
+    const AppSettings def;
     char sub[200];
     std::snprintf(sub, sizeof(sub), "Profile: %s%s  -  every change applies live and is saved to this profile.",
                   profiles_[static_cast<std::size_t>(activeProfile_)].name.c_str(), gameProcess_ ? " (game running)" : "");
@@ -854,6 +801,7 @@ void App::pageSound() {
         cfg_.dynPreset = def.dynPreset;
         cfg_.stepsOn = def.stepsOn;
         cfg_.stepsLevel = def.stepsLevel;
+        cfg_.stepsSmart = def.stepsSmart;
         session_.setVolumeDb(cfg_.sound.volumeDb);
         session_.set3d(cfg_.sound.enabled3d);
         requestRebuild();
@@ -911,7 +859,8 @@ void App::pageSound() {
     ImGui::SameLine(0, gap);
     beginCard("##steps", "Footstep clarity", &cfg_.stepsOn, colW,
               "Lifts the footstep 'crunch' band around 3.5 kHz, only while a channel is quiet - "
-              "gun cracks in the same band are not boosted.");
+              "gun cracks in the same band are not boosted. Smart: only short impacts (steps, landings, reloads), "
+              "not rain, wind or engines.");
     if (cardToggleChanged()) requestRebuild();
     {
         const double fs = 48000.0;
@@ -939,6 +888,9 @@ void App::pageSound() {
                   "Amount of footstep clarity. +3 dB is subtle, +6 dB is clear, +9 dB and more is very strong.",
                   col::Teal) == Edit::Commit)
         requestRebuild();
+    if (toggleRow("Smart", &cfg_.stepsSmart, "Impacts only", def.stepsSmart)) requestRebuild();
+    if (ImGui::IsItemHovered())
+        tooltip("Boost only short impacts in the footstep band. Steady sounds there - rain, wind, engines - are not lifted.");
     endCard();
     ImGui::Dummy(ImVec2(0, gap - S(10)));
 
@@ -1035,43 +987,14 @@ void App::pageDevices() {
     if (ImGui::IsItemHovered()) tooltip("Step-by-step check of VB-CABLE, 7.1 and your devices");
 }
 
-HeadphoneEq::Suggestion App::headphoneDefaults() const {
-    const AppSettings def;
-    if (!cfg_.eqOn || cfg_.eqText.empty()) return {def.sound.volumeDb, def.sound.bassDb};
-    return HeadphoneEq::fromCompact(cfg_.eqText).suggest(def.sound.volumeDb, def.sound.bassDb);
-}
-
-// The headphone EQ changed (from `before`): Volume and Bass follow the headphones' own defaults.
-// setActive: the profile on screen gets them exactly (a new EQ was imported); otherwise it moves
-// by the same amount as every other profile, which keeps each game's own tuning.
-void App::eqChanged(const HeadphoneEq::Suggestion& before, bool setActive) {
-    const HeadphoneEq::Suggestion now = headphoneDefaults();
-    const float dv = now.volumeDb - before.volumeDb, db = now.bassDb - before.bassDb;
-    auto shift = [&](SoundSettings& s) {
-        s.volumeDb = std::clamp(s.volumeDb + dv, -30.0f, 6.0f);
-        s.bassDb = std::clamp(s.bassDb + db, -12.0f, 6.0f);
-    };
-    for (std::size_t i = 0; i < profiles_.size(); ++i)
-        if (static_cast<int>(i) != activeProfile_) shift(profiles_[i].bundle.sound);
-    if (setActive) {
-        cfg_.sound.volumeDb = now.volumeDb;
-        cfg_.sound.bassDb = now.bassDb;
-    } else {
-        shift(cfg_.sound);
-    }
-    session_.setVolumeDb(cfg_.sound.volumeDb);
-    requestRebuild();
-}
-
 void App::importEq(const std::string& text, const std::string& name) {
     try {
         const HeadphoneEq eq = HeadphoneEq::parseText(text);
-        const HeadphoneEq::Suggestion before = headphoneDefaults();
         cfg_.eqText = eq.toCompact();
         cfg_.eqName = name;
         cfg_.eqOn = true;
         eqError_.clear();
-        eqChanged(before, true);
+        requestRebuild();
     } catch (const std::exception& e) {
         eqError_ = e.what();
     }
@@ -1080,15 +1003,8 @@ void App::importEq(const std::string& text, const std::string& name) {
 void App::eqCard() {
     beginCard("##eq", "Headphone EQ", &cfg_.eqOn, 0,
               "Corrects your headphones' own sound so the 3D picture is more accurate. Import a parametric EQ made for "
-              "your headphone model (Equalizer APO / AutoEq format). The same for every game profile. Importing one "
-              "also sets Volume and Bass to suit those headphones, and makes them the Sound page's defaults.");
-    if (cardToggleChanged()) {  // Volume and Bass move with the headphone defaults
-        const AppSettings def;
-        HeadphoneEq::Suggestion before{def.sound.volumeDb, def.sound.bassDb};  // was off: app defaults
-        if (!cfg_.eqOn && !cfg_.eqText.empty())                                 // was on
-            before = HeadphoneEq::fromCompact(cfg_.eqText).suggest(def.sound.volumeDb, def.sound.bassDb);
-        eqChanged(before, false);
-    }
+              "your headphone model (Equalizer APO / AutoEq format). The same for every game profile.");
+    if (cardToggleChanged()) requestRebuild();
     const HeadphoneEq eq = HeadphoneEq::fromCompact(cfg_.eqText);
     {
         auto freq = [](float x) { return 20.0 * std::pow(1000.0, static_cast<double>(x)); };  // 20 Hz .. 20 kHz
@@ -1110,12 +1026,6 @@ void App::eqCard() {
     else std::snprintf(b, sizeof(b), "%s  -  %zu filters, preamp %.1f dB", cfg_.eqName.empty() ? "Custom EQ" : cfg_.eqName.c_str(),
                        eq.bands.size(), eq.preampDb);
     ui::text(b, eq.empty() ? col::Faint : col::Text, 13.0f, !eq.empty());
-    if (!eq.empty() && cfg_.eqOn) {
-        const HeadphoneEq::Suggestion s = headphoneDefaults();
-        std::snprintf(b, sizeof(b), "Best for these headphones: Volume %.1f dB, Bass %+.1f dB (the Sound page's defaults)",
-                      s.volumeDb, s.bassDb);
-        ui::text(b, col::Faint, 12.0f);
-    }
     ImGui::Dummy(ImVec2(0, S(2)));
     if (actionButton("Import file...", true, true, S(150)) && !preview_) {
         wchar_t file[MAX_PATH] = {};
@@ -1144,11 +1054,10 @@ void App::eqCard() {
     if (ImGui::IsItemHovered()) tooltip("Paste parametric EQ text copied from a website (Preamp / Filter lines)");
     ImGui::SameLine(0, S(10));
     if (actionButton("Clear", false, !eq.empty(), S(100)) && !preview_) {
-        const HeadphoneEq::Suggestion before = headphoneDefaults();
         cfg_.eqText.clear();
         cfg_.eqName.clear();
         cfg_.eqOn = false;
-        eqChanged(before, false);
+        requestRebuild();
     }
     ImGui::SameLine(0, S(10));
     if (actionButton("Find your headphones", false, true, S(200))) openShellUrl(L"https://autoeq.app");
@@ -1523,10 +1432,7 @@ void App::setupDirect() {
         if (actionButton("Install engine", true, !cfg_.dev.output.empty() && !preview_))
             runApoSetup("Installing", {L"install", L"--device", widen(cfg_.dev.output)});
     }
-    if (!apoMsg_.empty()) {
-        para(apoMsg_.c_str(), col::Red, 12.5f);
-        if (apoMsg_.rfind("Cancelled", 0) != 0 && actionButton("Details", false, true, S(120))) openSetupLog();
-    }
+    if (!apoMsg_.empty()) para(apoMsg_.c_str(), col::Red, 12.5f);
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
 
@@ -1966,7 +1872,6 @@ void App::pollUpdates() {
             if (isNewerVersion(r.version, TAC_VERSION)) {
                 if (!update_ || update_->version != r.version) updDismissed_ = false;
                 update_ = r;
-                updNotes_ = parsePatchNotes(r.notes);
                 updStatus_ = "TacAudio " + r.version + " is available (you have " TAC_VERSION ").";
             } else {
                 update_.reset();
@@ -2424,7 +2329,7 @@ void App::pageProfiles() {
                 row("Room", b.sound.room.c_str());
                 std::snprintf(line, sizeof(line), "%s, punch %.0f", b.dynOn ? b.dynPreset.c_str() : "off", b.sound.punch);
                 row("Dynamics", line);
-                std::snprintf(line, sizeof(line), b.stepsOn ? "+%.1f dB" : "off",
+                std::snprintf(line, sizeof(line), b.stepsOn ? (b.stepsSmart ? "+%.1f dB, smart" : "+%.1f dB") : "off",
                               b.stepsLevel);
                 row("Footsteps", line);
                 std::snprintf(line, sizeof(line), "%+.1f dB", b.sound.bassDb);
@@ -2510,9 +2415,6 @@ void App::pageAbout() {
     ui::text("Binaural 3D audio for 7.1 game sound: measured-head HRTFs, diffuse-field equalisation, room "
              "modelling, combat dynamics and footstep clarity.",
              col::Dim, 13.5f);
-    ImGui::Dummy(ImVec2(0, S(4)));
-    if (actionButton("What's new", true, true, S(160))) openNotes();
-    if (ImGui::IsItemHovered()) tooltip("Patch notes: new features and fixes in each version");
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
     beginCard("##credits", "Credits & licences", nullptr, 0);
@@ -2530,76 +2432,6 @@ void App::pageAbout() {
         ui::text(l[1], col::Dim, 13.0f);
     }
     endCard();
-}
-
-// ------------------------------------------------------------------ What's new (patch notes)
-void App::openNotes() {
-    page_ = kPageNotes;
-    if (justUpdated_) {
-        justUpdated_ = false;
-        cfg_.lastVersion = TAC_VERSION;
-        if (!preview_) saveSettings(cfg_);
-    }
-}
-
-void App::notesCard(const char* id, const std::string& title, const PatchVersion& v, bool skipInstall) {
-    beginCard(id, title.c_str(), nullptr, 0);
-    bool first = true;
-    for (const auto& s : v.sections) {
-        if (s.items.empty() || (skipInstall && s.title == "Install")) continue;
-        if (!first) ImGui::Dummy(ImVec2(0, S(4)));
-        first = false;
-        if (!s.title.empty()) {
-            const ImU32 c = s.title == "New" ? col::Accent : s.title == "Fixed" ? col::Green : col::Teal;
-            ui::text(s.title.c_str(), c, 14.0f, true);
-        }
-        for (const auto& item : s.items) {
-            const ImVec2 p = ImGui::GetCursorScreenPos();
-            ImGui::GetWindowDrawList()->AddCircleFilled(p + ImVec2(S(5), S(9)), S(2.5f), col::Dim);
-            ImGui::SetCursorScreenPos(p + ImVec2(S(16), 0));
-            ImGui::BeginGroup();
-            para(item.c_str(), col::Text, 13.5f);
-            ImGui::EndGroup();
-        }
-    }
-    endCard();
-    ImGui::Dummy(ImVec2(0, S(6)));
-}
-
-void App::pageNotes() {
-    topBar("What's new", "Patch notes: the new features and fixes in each version of TacAudio.");
-    if (update_) {  // what the newer release brings, before downloading it
-        PatchVersion v;
-        if (!updNotes_.empty()) v = updNotes_.front();
-        bool any = false;
-        for (const auto& s : v.sections)
-            any = any || (!s.items.empty() && s.title != "Install");
-        if (any) {
-            notesCard("##notes_up", "Available now: TacAudio " + update_->version, v, true);
-        } else {
-            beginCard("##notes_up", ("Available now: TacAudio " + update_->version).c_str(), nullptr, 0);
-            para("The notes for this version are on its download page.", col::Dim, 13.5f);
-            endCard();
-            ImGui::Dummy(ImVec2(0, S(6)));
-        }
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - S(2));
-        if (actionButton("Download", true, true, S(160)))
-            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        ImGui::Dummy(ImVec2(0, S(14)));
-    }
-    if (notes_.empty()) {
-        para("No patch notes are built into this version.", col::Faint, 13.5f);
-        return;
-    }
-    for (std::size_t i = 0; i < notes_.size(); ++i) {
-        const PatchVersion& v = notes_[i];
-        if (v.empty()) continue;
-        std::string title = "Version " + v.version;
-        if (!v.label.empty()) title += "  -  " + v.label;
-        if (v.version == TAC_VERSION) title += "  (your version)";
-        const std::string id = "##notes" + std::to_string(i);
-        notesCard(id.c_str(), title, v, false);
-    }
 }
 
 }  // namespace tac

@@ -1,7 +1,5 @@
 // TacAudio unit tests. Each DSP block is checked against a slow, obviously-correct reference.
 
-#include <fstream>
-#include <iterator>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -17,7 +15,6 @@
 #include "core/footstep_detector.h"
 #include "core/footstep_synth.h"
 #include "core/headphone_eq.h"
-#include "core/patch_notes.h"
 #include "core/convolver.h"
 #include "core/fft.h"
 #include "core/hrtf.h"
@@ -941,6 +938,7 @@ void testFootstepBoost() {
     // Quiet 3.5 kHz content (footstep crunch) is lifted; the same band when loud (gun crack) is not.
     DynamicsParams p = dynamicsPreset("off");
     p.footstepDb = 6.0f;
+    p.footstepSmart = false;  // classic: any quiet sound in the band
     CHECK(p.active());
     auto gainAt = [&](double inDb, double hz) {
         const double fs = 48000;
@@ -958,40 +956,6 @@ void testFootstepBoost() {
     CHECK_NEAR(gainAt(-45.0, 3500.0), 6.0, 0.6);  // quiet crunch: full +6 dB
     CHECK_NEAR(gainAt(-10.0, 3500.0), 0.0, 0.3);  // loud crack: untouched
     CHECK_NEAR(gainAt(-45.0, 200.0), 0.0, 0.5);   // quiet but off-band: untouched
-}
-
-void testPatchNotes() {
-    const std::string md =
-        "# TacAudio patch notes\n"
-        "<!-- a comment\n   over lines -->\n"
-        "## 0.7.1 - upcoming\n\n"
-        "### New\n"
-        "- Patch notes in the **app**.\n"
-        "* See [the README](https://example.com) and `tacaudio-cli`.\n"
-        "### Fixed\n"
-        "- A bug.\n"
-        "## v0.7.0 (2026-11-12)\n"
-        "### New\n"
-        "- Profiles.\n";
-    const auto v = parsePatchNotes(md);
-    CHECK(v.size() == 2);
-    CHECK(v[0].version == "0.7.1" && v[0].label == "upcoming");
-    CHECK(v[0].sections.size() == 2 && v[0].sections[0].title == "New" && v[0].sections[1].title == "Fixed");
-    CHECK(v[0].sections[0].items.size() == 2);
-    CHECK(v[0].sections[0].items[0] == "Patch notes in the app.");
-    CHECK(v[0].sections[0].items[1] == "See the README and tacaudio-cli.");
-    CHECK(v[1].version == "0.7.0" && v[1].label == "2026-11-12");
-    // A GitHub release text: no "## version", just sections and other lines.
-    const auto r = parsePatchNotes("### New\r\n- One\r\n\r\n**Install:** run it.\r\n");
-    CHECK(r.size() == 1 && r[0].version.empty() && !r[0].empty());
-    CHECK(r[0].sections[0].items.size() == 2 && r[0].sections[0].items[1] == "Install: run it.");
-#ifdef TAC_CHANGELOG_FILE
-    std::ifstream f(TAC_CHANGELOG_FILE, std::ios::binary);
-    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    const auto all = parsePatchNotes(text);
-    CHECK(all.size() >= 5);  // the real CHANGELOG.md: every version has notes
-    for (const auto& x : all) CHECK(!x.version.empty() && !x.empty());
-#endif
 }
 
 void testHeadphoneEq() {
@@ -1015,35 +979,6 @@ void testHeadphoneEq() {
     one.bands.push_back({EqBand::Type::Peak, 2500.0f, 4.0f, 2.0f});
     CHECK_NEAR(one.responseDb(2500.0), 4.0, 0.05);
     CHECK_NEAR(one.responseDb(100.0), 0.0, 0.05);
-
-    // Suggested volume / bass for these headphones (app defaults -6 dB and 0 dB).
-    {
-        const auto none = HeadphoneEq{}.suggest(-6.0f, 0.0f);  // no EQ: the app defaults
-        CHECK(none.volumeDb == -6.0f && none.bassDb == 0.0f);
-        HeadphoneEq flat;  // only a preamp: -5 dB everywhere -> volume +5, bass unchanged
-        flat.preampDb = -5.0f;
-        const auto f = flat.suggest(-6.0f, 0.0f);
-        CHECK_NEAR(f.volumeDb, -1.0, 1e-6);
-        CHECK_NEAR(f.bassDb, 0.0, 1e-6);
-        HeadphoneEq loud;  // more than the default's headroom back: capped at 0 dB
-        loud.preampDb = -12.0f;
-        CHECK_NEAR(loud.suggest(-6.0f, 0.0f).volumeDb, 0.0, 1e-6);
-        HeadphoneEq shelf;  // +8 dB bass shelf (preamp -8): half of the extra bass off the subwoofer
-        shelf.preampDb = -8.0f;
-        shelf.bands.push_back({EqBand::Type::LowShelf, 105.0f, 8.0f, 0.71f});
-        const auto s = shelf.suggest(-6.0f, 0.0f);
-        CHECK(s.bassDb <= -2.5f && s.bassDb >= -4.0f);
-        CHECK(s.volumeDb >= -0.5f);  // mids sit at -8 dB: given back up to the 0 dB cap
-        HeadphoneEq cut;  // a correction that removes bass: subwoofer channel left as it is
-        cut.bands.push_back({EqBand::Type::LowShelf, 105.0f, -6.0f, 0.71f});
-        CHECK_NEAR(cut.suggest(-6.0f, 0.0f).bassDb, 0.0, 1e-6);
-        const auto ex = HeadphoneEq::fromCompact(  // a real AutoEq-style correction
-            "-5.8|LSC:105:5.5:0.71|PK:180:-2.1:0.9|PK:2400:3.2:2.2|PK:4300:-3.5:3.5|PK:6200:2.4:4|HSC:10000:-1.5:0.71");
-        const auto e = ex.suggest(-6.0f, 0.0f);
-        std::printf("    example EQ suggests volume %.1f dB, bass %.1f dB\n", e.volumeDb, e.bassDb);
-        CHECK(e.volumeDb > -6.0f && e.volumeDb <= 0.0f);
-        CHECK(e.bassDb < 0.0f && e.bassDb >= -6.0f);
-    }
     bool threw = false;
     try {
         (void)HeadphoneEq::parseText("hello world");
@@ -1242,6 +1177,58 @@ void testFootstepDetector() {
     CHECK(oSlowFire.any[2] < 0.05f);
 }
 
+void testSmartFootsteps() {
+    // Smart mode: short impacts in the footstep band are lifted, a steady sound in the same band
+    // (rain, engine hum) is not.
+    DynamicsParams p = dynamicsPreset("off");
+    p.footstepDb = 6.0f;
+    p.footstepSmart = true;
+    const double fs = 48000;
+    Rng rng;
+    auto bandNoise = [&](std::size_t n) {  // noise around 3.5 kHz
+        Biquad bp = Biquad::bandpass(fs, 3500.0, 0.8);
+        std::vector<float> v(n);
+        for (auto& x : v) x = bp.process(rng.next());
+        return v;
+    };
+    auto scale = [](std::vector<float>& v, double db) {
+        const double g = std::pow(10.0, db / 20.0) / std::sqrt(energy(v) / static_cast<double>(v.size()));
+        for (auto& x : v) x = static_cast<float>(x * g);
+    };
+    auto gainDb = [&](const std::vector<float>& in, std::size_t from) {
+        ChannelDynamics d(fs, 1, p);
+        std::vector<float> x = in;
+        float* ptr[1] = {x.data()};
+        d.process(ptr, x.size());
+        const auto L = static_cast<std::ptrdiff_t>(d.latency());
+        const auto f = static_cast<std::ptrdiff_t>(from);
+        return 10 * std::log10(energy(std::vector<float>(x.begin() + f, x.end())) /
+                               energy(std::vector<float>(in.begin() + f - L, in.end() - L)));
+    };
+    // Steady band noise at -45 dB (rain, engine): classic mode lifts it, smart mode does not.
+    std::vector<float> steady = bandNoise(96000);
+    scale(steady, -45.0);
+    const double steadySmart = gainDb(steady, 48000);
+    p.footstepSmart = false;
+    const double steadyClassic = gainDb(steady, 48000);
+    // Footsteps: 60 ms bursts every 400 ms at -40 dB: smart mode lifts them about as much as classic.
+    std::vector<float> burst = bandNoise(2880);
+    scale(burst, -40.0);
+    std::vector<float> steps(96000, 0.0f);
+    for (std::size_t s = 0; s + burst.size() < steps.size(); s += 19200)
+        for (std::size_t i = 0; i < burst.size(); ++i)
+            steps[s + i] = burst[i] * std::sin(std::numbers::pi_v<float> * static_cast<float>(i) / static_cast<float>(burst.size()));
+    const double stepsClassic = gainDb(steps, 48000);
+    p.footstepSmart = true;
+    const double stepsSmart = gainDb(steps, 48000);
+    std::printf("    steady: classic %+.1f dB, smart %+.1f dB | steps: classic %+.1f dB, smart %+.1f dB\n",
+                steadyClassic, steadySmart, stepsClassic, stepsSmart);
+    CHECK(steadyClassic > 3.0);
+    CHECK(steadySmart < 1.0);
+    CHECK(stepsSmart > stepsClassic - 1.0);
+    CHECK(stepsSmart > 3.0);
+}
+
 #ifdef TAC_TEST_SOFA_FILE
 // Real measured data: verifies the SOFA -> TacAudio coordinate flip and ear assignment.
 void testSofaKemar() {
@@ -1301,9 +1288,9 @@ int main() {
         {"room reverb presets", testRoom},
         {"M3 dynamics: tame loud, lift quiet, independent channels", testDynamics},
         {"M3 footstep boost: quiet band only", testFootstepBoost},
+        {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
         {"footstep detector: enemy steps yes; reloads, fire, own sounds, rain, explosions no", testFootstepDetector},
         {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
-        {"patch notes: changelog and release text", testPatchNotes},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE
         {"SOFA import: MIT KEMAR conventions", testSofaKemar},

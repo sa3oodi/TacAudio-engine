@@ -4,6 +4,13 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.4 - 2026-11-14
+
+### Improved
+- TacAudio is back to version 0.7.0: the sound engine and the app are exactly as they were in 0.7.0, including Smart footsteps (on by default).
+- Removed again: the patch notes page in the app and Headphone EQ setting Volume and Bass (defaults are back to Volume -6 dB, Bass 0 dB).
+- Direct mode: after updating, click Update engine (or reinstall the engine on the Setup page).
+
 ## 0.7.3 - 2026-11-14
 
 ### Fixed
