@@ -14,6 +14,7 @@ struct ReleaseInfo {
     std::string installerUrl;     // the release's TacAudio-Setup-*.exe (empty if none)
     std::string installerSha256;  // its SHA-256 as published by GitHub (lowercase hex; empty if none)
     bool canInstall() const { return !installerUrl.empty() && installerSha256.size() == 64; }
+    std::string notes;    // release text (Markdown, from CHANGELOG.md)
 };
 
 // Latest published release. Throws std::runtime_error when offline / on unexpected answers.

@@ -4,6 +4,11 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.6 - 2026-11-14
+
+### New
+- What's new is back: patch notes in the app (About > What's new), a notice after each update, and the new version's notes before you update.
+
 ## 0.7.5 - 2026-11-14
 
 ### New
