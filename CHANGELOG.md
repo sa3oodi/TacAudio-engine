@@ -4,6 +4,15 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.3 - 2026-11-14
+
+### Fixed
+- "Update engine" could fail while Windows audio still had the old engine open, so the update notice kept coming back and reinstalling showed "Something went wrong". The engine is now replaced even while it is in use.
+- Installing the engine failed when the headphone name or the Windows user name had non-English characters.
+
+### Improved
+- If installing or updating the engine fails, the notice says so, with Details and Try again buttons.
+
 ## 0.7.2 - 2026-11-14
 
 ### Improved
