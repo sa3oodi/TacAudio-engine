@@ -144,6 +144,7 @@ private:
     std::string apoIniText() const;
     void pollDirect();
     void runApoSetup(const char* label, std::vector<std::wstring> args);
+    void openSetupLog();  // the last engine install / removal log, in Notepad
     const wasapi::DeviceInfo* outputInfo() const;
     bool busy() const;
     template <typename F>

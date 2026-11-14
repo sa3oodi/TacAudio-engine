@@ -557,7 +557,7 @@ void App::pollDirect() {
     if (apoJob_.valid() && apoJob_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         const int code = apoJob_.get();
         apoMsg_ = code == 0 ? std::string() : code < 0 ? "Cancelled - administrator permission is needed."
-                                                       : "Something went wrong - details in %TEMP%\\tacapo_setup.txt";
+                                                       : "Something went wrong - click Details to see why.";
         refreshDevices();
         engineOutdated_ = direct_ && apoctl::engineOutdated();
         lastApoIni_.clear();  // re-send the settings to a fresh install
@@ -596,6 +596,11 @@ void App::pollDirect() {
     status_.engine.running = wantRunning_ && now - audioSeen_ < std::chrono::seconds(2);
     status_.source = now - surroundSeen_ < std::chrono::seconds(15) ? "Game audio: 7.1 surround" : "Game audio: stereo";
     status_.output = cfg_.dev.output + " (Direct mode)";
+}
+
+void App::openSetupLog() {
+    const auto log = std::filesystem::temp_directory_path() / "tacapo_setup.txt";
+    ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + log.wstring() + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
 }
 
 void App::runApoSetup(const char* label, std::vector<std::wstring> args) {
@@ -774,11 +779,17 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         const ImVec2 up = ImGui::GetCursorScreenPos();
         const float h = S(42);
         dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Teal, 0.12f), S(8));
-        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(14), S(12)), col::Text,
+        const bool failed = !apoJob_.valid() && !apoMsg_.empty();
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(14), S(12)), failed ? col::Red : col::Text,
                     apoJob_.valid() ? "Updating the engine... (approve the Windows prompt; sound pauses for a few seconds)"
+                    : failed        ? apoMsg_.c_str()
                                     : "TacAudio was updated - update its engine in Windows audio to get the new sound features.");
+        if (failed && apoMsg_.rfind("Cancelled", 0) != 0) {
+            ImGui::SetCursorScreenPos(up + ImVec2(avail - S(170) - S(130), S(4)));
+            if (actionButton("Details", false, true, S(120))) openSetupLog();
+        }
         ImGui::SetCursorScreenPos(up + ImVec2(avail - S(170), S(4)));
-        if (actionButton("Update engine", true, !apoJob_.valid(), S(160)))
+        if (actionButton(failed ? "Try again" : "Update engine", true, !apoJob_.valid(), S(160)))
             runApoSetup("Installing", {L"install", L"--device", fromUtf8(cfg_.dev.output)});
         ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
     }
@@ -1512,7 +1523,10 @@ void App::setupDirect() {
         if (actionButton("Install engine", true, !cfg_.dev.output.empty() && !preview_))
             runApoSetup("Installing", {L"install", L"--device", widen(cfg_.dev.output)});
     }
-    if (!apoMsg_.empty()) para(apoMsg_.c_str(), col::Red, 12.5f);
+    if (!apoMsg_.empty()) {
+        para(apoMsg_.c_str(), col::Red, 12.5f);
+        if (apoMsg_.rfind("Cancelled", 0) != 0 && actionButton("Details", false, true, S(120))) openSetupLog();
+    }
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
 

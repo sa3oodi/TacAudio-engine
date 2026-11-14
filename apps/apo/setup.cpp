@@ -11,6 +11,7 @@
 // restarts the Windows audio service. uninstall puts every backed-up value back exactly.
 
 #include <windows.h>
+#include <shellapi.h>
 #include <mmreg.h>
 #include <ks.h>
 #include <ksmedia.h>
@@ -47,6 +48,14 @@ std::string narrow(const std::wstring& w) {
     std::string s(static_cast<size_t>(n), '\0');
     WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
     return s;
+}
+
+std::wstring widen(const std::string& s) {
+    if (s.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), w.data(), n);
+    return w;
 }
 
 [[noreturn]] void fail(const std::string& msg) {
@@ -198,6 +207,26 @@ void requireAdmin() {
     if (!isAdmin()) fail("this command needs administrator rights (run it from an elevated prompt)");
 }
 
+// Puts src at dst even while dst is loaded by audiodg: a loaded DLL cannot be overwritten but can
+// be renamed, so the old file moves aside (deleted now if possible, else at the next restart).
+void replaceFile(const fs::path& src, const fs::path& dst) {
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(dst.parent_path(), ec))  // leftovers from earlier updates
+        if (e.path().filename().wstring().rfind(dst.filename().wstring() + L".old", 0) == 0) fs::remove(e.path(), ec);
+    if (fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec)) return;
+    const std::string first = ec.message();
+    if (fs::exists(dst)) {
+        const fs::path old = dst.wstring() + L".old" + std::to_wstring(GetTickCount64());
+        if (!MoveFileExW(dst.c_str(), old.c_str(), MOVEFILE_REPLACE_EXISTING))
+            fail("cannot replace " + narrow(dst.wstring()) + ": " + first + " (rename failed, error " +
+                 std::to_string(GetLastError()) + ")");
+        std::printf("in use   : old %s moved aside\n", narrow(dst.filename().wstring()).c_str());
+        if (!DeleteFileW(old.c_str())) MoveFileExW(old.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
+    if (!fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec))
+        fail("cannot copy " + narrow(src.wstring()) + " to " + narrow(dst.wstring()) + ": " + ec.message());
+}
+
 // ------------------------------------------------------------------ commands
 int cmdInstall(const std::string& device, DWORD channels) {
     requireAdmin();
@@ -215,13 +244,7 @@ int cmdInstall(const std::string& device, DWORD channels) {
     if (!fs::exists(src)) fail("TacAudioApo.dll not found next to tacapo-setup.exe");
     fs::create_directories(dstDir);
     std::error_code ec;
-    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    if (ec) {  // loaded by audiodg: stop audio, copy, the restart below brings it back
-        std::printf("DLL in use - stopping audio to replace it\n");
-        restartAudio();
-        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-        if (ec) fail("cannot copy the DLL: " + ec.message());
-    }
+    replaceFile(src, dst);  // the audio restart at the end loads the new one
     std::printf("copied   : %s\n", narrow(dst.wstring()).c_str());
 
     // 1b) Head (HRTF) files next to the DLL: hrtf/MIT KEMAR + hrtf/sadie2/{D1,D2}.sofa.
@@ -317,7 +340,12 @@ int cmdUninstall() {
     RegDeleteTreeW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\TacAudio\\Apo");
     std::error_code ec;
     fs::remove_all(installDir(), ec);
-    if (ec) std::printf("note: could not delete %s yet (%s)\n", narrow(installDir().wstring()).c_str(), ec.message().c_str());
+    if (ec) {
+        std::printf("note: could not delete %s yet (%s) - it goes at the next restart\n",
+                    narrow(installDir().wstring()).c_str(), ec.message().c_str());
+        for (const auto& e : fs::recursive_directory_iterator(installDir(), ec))
+            if (e.is_regular_file(ec)) MoveFileExW(e.path().c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    }
     std::printf("\nUninstalled (%d device setting(s) restored).\n", restored);
     return 0;
 }
@@ -496,8 +524,16 @@ int cmdSelfTest() {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    std::vector<std::string> a(argv + 1, argv + argc);
+int main() {
+    // Arguments as UTF-8 (argv is in the ANSI code page, which breaks device names such as
+    // "Realtek(R)" or non-English ones, and user folders with non-ASCII names).
+    std::vector<std::string> a;
+    {
+        int n = 0;
+        wchar_t** w = CommandLineToArgvW(GetCommandLineW(), &n);
+        for (int i = 1; w && i < n; ++i) a.push_back(narrow(w[i]));
+        if (w) LocalFree(w);
+    }
     auto opt = [&](const char* name, const std::string& def) {
         for (size_t i = 0; i + 1 < a.size(); ++i)
             if (a[i] == name) return a[i + 1];
@@ -506,7 +542,7 @@ int main(int argc, char** argv) {
     const std::string log = opt("--log", "");
     if (!log.empty()) {
         FILE* f = nullptr;
-        freopen_s(&f, log.c_str(), "w", stdout);
+        _wfreopen_s(&f, widen(log).c_str(), L"w", stdout);
     }
     try {
         const std::string cmd = a.empty() ? "" : a[0];
