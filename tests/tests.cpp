@@ -1,5 +1,7 @@
 // TacAudio unit tests. Each DSP block is checked against a slow, obviously-correct reference.
 
+#include <fstream>
+#include <iterator>
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -15,6 +17,7 @@
 #include "core/footstep_detector.h"
 #include "core/footstep_synth.h"
 #include "core/headphone_eq.h"
+#include "core/patch_notes.h"
 #include "core/convolver.h"
 #include "core/fft.h"
 #include "core/hrtf.h"
@@ -958,6 +961,40 @@ void testFootstepBoost() {
     CHECK_NEAR(gainAt(-45.0, 200.0), 0.0, 0.5);   // quiet but off-band: untouched
 }
 
+void testPatchNotes() {
+    const std::string md =
+        "# TacAudio patch notes\n"
+        "<!-- a comment\n   over lines -->\n"
+        "## 0.7.1 - upcoming\n\n"
+        "### New\n"
+        "- Patch notes in the **app**.\n"
+        "* See [the README](https://example.com) and `tacaudio-cli`.\n"
+        "### Fixed\n"
+        "- A bug.\n"
+        "## v0.7.0 (2026-11-12)\n"
+        "### New\n"
+        "- Profiles.\n";
+    const auto v = parsePatchNotes(md);
+    CHECK(v.size() == 2);
+    CHECK(v[0].version == "0.7.1" && v[0].label == "upcoming");
+    CHECK(v[0].sections.size() == 2 && v[0].sections[0].title == "New" && v[0].sections[1].title == "Fixed");
+    CHECK(v[0].sections[0].items.size() == 2);
+    CHECK(v[0].sections[0].items[0] == "Patch notes in the app.");
+    CHECK(v[0].sections[0].items[1] == "See the README and tacaudio-cli.");
+    CHECK(v[1].version == "0.7.0" && v[1].label == "2026-11-12");
+    // A GitHub release text: no "## version", just sections and other lines.
+    const auto r = parsePatchNotes("### New\r\n- One\r\n\r\n**Install:** run it.\r\n");
+    CHECK(r.size() == 1 && r[0].version.empty() && !r[0].empty());
+    CHECK(r[0].sections[0].items.size() == 2 && r[0].sections[0].items[1] == "Install: run it.");
+#ifdef TAC_CHANGELOG_FILE
+    std::ifstream f(TAC_CHANGELOG_FILE, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const auto all = parsePatchNotes(text);
+    CHECK(all.size() >= 5);  // the real CHANGELOG.md: every version has notes
+    for (const auto& x : all) CHECK(!x.version.empty() && !x.empty());
+#endif
+}
+
 void testHeadphoneEq() {
     // AutoEq / Equalizer APO text -> bands; compact round trip; response; renderer applies it.
     const std::string text =
@@ -1320,6 +1357,7 @@ int main() {
         {"smart footsteps: impacts lifted, steady sound not", testSmartFootsteps},
         {"footstep detector: enemy steps yes; reloads, fire, own sounds, rain, explosions no", testFootstepDetector},
         {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
+        {"patch notes: changelog and release text", testPatchNotes},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
 #ifdef TAC_TEST_SOFA_FILE
         {"SOFA import: MIT KEMAR conventions", testSofaKemar},

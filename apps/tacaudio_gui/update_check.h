@@ -9,6 +9,7 @@ namespace tac {
 struct ReleaseInfo {
     std::string version;  // "0.7.0" (tag without the leading v)
     std::string url;      // release page
+    std::string notes;    // release text (Markdown, from CHANGELOG.md)
 };
 
 // Latest published release. Throws std::runtime_error when offline / on unexpected answers.

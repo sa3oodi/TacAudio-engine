@@ -257,6 +257,8 @@ docs/SIGNING.md    code signing setup      .signpath/  SignPath artifact configu
 - Upmix for stereo-only games
 - Code-signed installer (SignPath Foundation, applied for)
 
+What changed in each version: [CHANGELOG.md](CHANGELOG.md) (also in the app: *About › What's new*).
+
 ## Credits
 
 TacAudio uses the **SADIE II** HRTF database (University of York, Apache-2.0), the **MIT KEMAR**

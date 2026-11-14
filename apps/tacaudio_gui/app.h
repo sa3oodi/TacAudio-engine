@@ -18,6 +18,7 @@
 #include "imgui.h"
 #include "overlay.h"
 #include "core/headphone_eq.h"
+#include "core/patch_notes.h"
 #include "profiles.h"
 #include "update_check.h"
 #include "session.h"
@@ -39,6 +40,7 @@ struct AppSettings {
     std::string eqName;   // where it came from (file name / headphone model)
 
     // App behaviour.
+    std::string lastVersion;        // version whose patch notes were last seen ("" = before 0.7.1)
     bool startWithWindows = false;  // mirrored from the registry Run key
     bool autoEngine = true;         // turn the engine on when the app starts
     bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
@@ -93,6 +95,7 @@ public:
     static constexpr int kPageSetup = 5;
     static constexpr int kPageProfiles = 6;
     static constexpr int kPageHeadTest = 7;
+    static constexpr int kPageNotes = 8;  // "What's new" (patch notes)
 
 private:
     void sidebar();
@@ -103,6 +106,9 @@ private:
     void pagePerformance();
     void pageSettings();
     void pageAbout();
+    void pageNotes();
+    void notesCard(const char* id, const std::string& title, const PatchVersion& v, bool skipInstall);
+    void openNotes();  // shows "What's new" and marks this version's notes as seen
     void pageSetup();
     void eqCard();
     void importEq(const std::string& text, const std::string& name);
@@ -233,6 +239,11 @@ private:
     std::optional<ReleaseInfo> update_;    // a newer release than this build
     std::string updStatus_;
     bool updDismissed_ = false;
+    std::vector<PatchVersion> updNotes_;   // what the newer release brings (its GitHub text)
+
+    // Patch notes built into this version (CHANGELOG.md), and "updated" notice after an update.
+    std::vector<PatchVersion> notes_;
+    bool justUpdated_ = false;
     std::chrono::steady_clock::time_point nextUpdCheck_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 };
 

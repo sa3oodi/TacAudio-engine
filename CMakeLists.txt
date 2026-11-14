@@ -28,6 +28,7 @@ add_library(tac_core STATIC
     src/core/panner.cpp
     src/core/binaural_renderer.cpp
     src/core/scene.cpp
+    src/core/patch_notes.cpp
     src/core/limiter.cpp
     src/core/room.cpp
     src/core/dynamics.cpp
@@ -143,7 +144,9 @@ if(WIN32)
         endif()
 
         set(TAC_RES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/apps/tacaudio_gui/res)
+        set(TAC_CHANGELOG ${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md)
         configure_file(${TAC_RES_DIR}/tacaudio.rc.in ${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc @ONLY)
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc PROPERTIES OBJECT_DEPENDS ${TAC_CHANGELOG})
         add_executable(tacaudio_gui WIN32
             apps/tacaudio_gui/main.cpp apps/tacaudio_gui/app.cpp apps/tacaudio_gui/ui_widgets.cpp
             apps/tacaudio_gui/profiles.cpp apps/tacaudio_gui/game_library.cpp apps/tacaudio_gui/update_check.cpp
@@ -175,6 +178,7 @@ if(TAC_BUILD_TESTS)
     enable_testing()
     add_executable(tac_tests tests/tests.cpp)
     target_link_libraries(tac_tests PRIVATE tac_core)
+    target_compile_definitions(tac_tests PRIVATE TAC_CHANGELOG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md")
     if(TAC_WITH_SOFA)
         target_link_libraries(tac_tests PRIVATE tac_sofa)
         target_compile_definitions(tac_tests PRIVATE TAC_TEST_SOFA_FILE="${TAC_KEMAR_SOFA}")

@@ -1,6 +1,7 @@
 #include "update_check.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 #include <vector>
 
@@ -32,8 +33,49 @@ std::string jsonField(const std::string& j, const std::string& key) {
     if (q == std::string::npos) return {};
     std::string v;
     for (std::size_t i = q + 1; i < j.size() && j[i] != '"'; ++i) {
-        if (j[i] == '\\' && i + 1 < j.size()) ++i;
-        v += j[i];
+        if (j[i] != '\\' || i + 1 >= j.size()) {
+            v += j[i];
+            continue;
+        }
+        const char e = j[++i];
+        switch (e) {
+            case 'n': v += '\n'; break;
+            case 'r': v += '\r'; break;
+            case 't': v += '\t'; break;
+            case 'b': case 'f': break;
+            case 'u': {  // \uXXXX -> UTF-8 (surrogate pairs combined)
+                auto hex = [&](std::size_t at) -> unsigned {
+                    if (at + 4 > j.size()) return 0xFFFD;
+                    return static_cast<unsigned>(std::strtoul(j.substr(at, 4).c_str(), nullptr, 16));
+                };
+                unsigned cp = hex(i + 1);
+                i += 4;
+                if (cp >= 0xD800 && cp < 0xDC00 && i + 6 < j.size() && j[i + 1] == '\\' && j[i + 2] == 'u') {
+                    const unsigned lo = hex(i + 3);
+                    if (lo >= 0xDC00 && lo < 0xE000) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        i += 6;
+                    }
+                }
+                if (cp < 0x80) {
+                    v += static_cast<char>(cp);
+                } else if (cp < 0x800) {
+                    v += static_cast<char>(0xC0 | (cp >> 6));
+                    v += static_cast<char>(0x80 | (cp & 0x3F));
+                } else if (cp < 0x10000) {
+                    v += static_cast<char>(0xE0 | (cp >> 12));
+                    v += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                    v += static_cast<char>(0x80 | (cp & 0x3F));
+                } else {
+                    v += static_cast<char>(0xF0 | (cp >> 18));
+                    v += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+                    v += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                    v += static_cast<char>(0x80 | (cp & 0x3F));
+                }
+                break;
+            }
+            default: v += e; break;  // \" \\ \/
+        }
     }
     return v;
 }
@@ -100,6 +142,7 @@ ReleaseInfo fetchLatestRelease() {
     r.version = jsonField(body, "tag_name");
     if (!r.version.empty() && (r.version[0] == 'v' || r.version[0] == 'V')) r.version.erase(0, 1);
     r.url = jsonField(body, "html_url");
+    r.notes = jsonField(body, "body");
     if (r.version.empty()) throw std::runtime_error("unexpected answer from GitHub");
     if (r.url.rfind("https://github.com/", 0) != 0) r.url = "https://github.com/sa3oodi/TacAudio-engine/releases/latest";
     return r;

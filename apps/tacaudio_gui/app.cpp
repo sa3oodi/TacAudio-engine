@@ -20,6 +20,7 @@
 #include "core/biquad.h"
 #include "core/dynamics.h"
 #include "core/headphone_eq.h"
+#include "core/patch_notes.h"
 #include "core/layout.h"
 #include "core/wav.h"
 #include "platform/wasapi.h"
@@ -106,6 +107,7 @@ AppSettings loadSettings() {
             else if (k == "eqOn") s.eqOn = v == "1";
             else if (k == "eq") s.eqText = v;
             else if (k == "eqName") s.eqName = v;
+            else if (k == "lastVersion") s.lastVersion = v;
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
@@ -169,7 +171,7 @@ void saveSettings(const AppSettings& s) {
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
       << "\neqName=" << s.eqName << "\noverlayOn=" << (s.overlayOn ? 1 : 0) << "\noverlaySize=" << s.overlaySize
       << "\noverlayOpacity=" << s.overlayOpacity << "\noverlayPos=" << s.overlayPos
-      << "\noverlayLevel=" << s.overlayLevel << "\n";
+      << "\noverlayLevel=" << s.overlayLevel << "\nlastVersion=" << s.lastVersion << "\n";
 }
 
 namespace {
@@ -199,6 +201,16 @@ App::App(bool previewRunning) : preview_(previewRunning) {
     // Game profiles: start on Default (a game profile is picked once its game is in front).
     profiles_ = loadProfiles(bundleOf(cfg_));
     applyBundle(cfg_, profiles_.front().bundle);
+    // Patch notes built into the exe; after an update, offer this version's notes once.
+    if (HRSRC r = FindResourceW(nullptr, MAKEINTRESOURCEW(200), MAKEINTRESOURCEW(10) /*RT_RCDATA*/)) {
+        if (HGLOBAL g = LoadResource(nullptr, r)) {
+            const char* p = static_cast<const char*>(LockResource(g));
+            if (p) notes_ = parsePatchNotes(std::string(p, SizeofResource(nullptr, r)));
+        }
+    }
+    // Updated: the notes seen last are older, or an install from before patch notes existed.
+    justUpdated_ = !preview_ && (cfg_.lastVersion.empty() ? cfg_.setupDone : isNewerVersion(TAC_VERSION, cfg_.lastVersion));
+    if (!justUpdated_) cfg_.lastVersion = TAC_VERSION;
     saved_ = cfg_;
     lastStatus_ = lastSave_ = std::chrono::steady_clock::now();
     {  // dev check of the listening test without sound on the headphones (smoke test only)
@@ -301,6 +313,13 @@ App::App(bool previewRunning) : preview_(previewRunning) {
             for (int i = 0; i < 20; ++i) dirField_.updateWeights(pk, az, lf, 8, 0.1f);
             wchar_t ov[MAX_PATH] = {};  // dev: TACAUDIO_PREVIEW_OVERLAY=<file.bmp> saves the ring bitmap
             if (GetEnvironmentVariableW(L"TACAUDIO_PREVIEW_OVERLAY", ov, MAX_PATH)) overlay_.saveBitmap(dirField_, 140, 0.8f, ov);
+        }
+        if (GetEnvironmentVariableA("TACAUDIO_PREVIEW_NOTES", nullptr, 0)) {  // dev: update + "updated" banners
+            justUpdated_ = true;
+            update_ = ReleaseInfo{"9.9.9", "https://github.com/sa3oodi/TacAudio-engine/releases/latest",
+                                  "### New\n- A sample feature from the next release.\n### Fixed\n- A sample fix.\n"
+                                  "### Install\n- Download the installer below."};
+            updNotes_ = parsePatchNotes(update_->notes);
         }
         cfg_.eqOn = true;  // sample correction curve for the Devices page
         cfg_.eqName = "Example headphones";
@@ -629,6 +648,7 @@ void App::frame() {
         case kPageSetup: pageSetup(); break;
         case kPageProfiles: pageProfiles(); break;
         case kPageHeadTest: pageHeadTest(); break;
+        case kPageNotes: pageNotes(); break;
         default: pageAbout(); break;
     }
     ImGui::EndChild();
@@ -665,7 +685,8 @@ void App::sidebar() {
     const char* labels[] = {"Sound", "Profiles", "Devices", "Setup", "Performance", "Settings", "About"};
     const int pages[] = {0, kPageProfiles, 1, kPageSetup, 2, 3, 4};
     for (int i = 0; i < 7; ++i)
-        if (navItem(glyphs[i], labels[i], (page_ == kPageHeadTest ? 0 : page_) == pages[i])) page_ = pages[i];
+        if (navItem(glyphs[i], labels[i], (page_ == kPageHeadTest ? 0 : page_ == kPageNotes ? 4 : page_) == pages[i]))
+            page_ = pages[i];
 
     // Engine status at the bottom of the sidebar.
     const float h = ImGui::GetWindowHeight();
@@ -764,6 +785,23 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
             runApoSetup("Installing", {L"install", L"--device", fromUtf8(cfg_.dev.output)});
         ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
     }
+    if (justUpdated_) {  // first start after an update: offer this version's notes
+        const ImVec2 up = ImGui::GetCursorScreenPos();
+        const float h = S(42);
+        dl->AddRectFilled(up, up + ImVec2(avail, h), withAlpha(col::Teal, 0.12f), S(8));
+        dl->AddText(fonts.regular, S(15), up + ImVec2(S(14), S(12)), col::Teal, icon::Info);
+        dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text,
+                    "TacAudio was updated to " TAC_VERSION " - see what's new and what was fixed.");
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
+        if (pillButton("What's new", col::Teal, IM_COL32(8, 20, 18, 255), S(140))) openNotes();
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34), S(7)));
+        if (iconButton("##notesclose", "\xEE\x9C\x91", "Close", true, 28)) {  // U+E711
+            justUpdated_ = false;
+            cfg_.lastVersion = TAC_VERSION;
+            if (!preview_) saveSettings(cfg_);
+        }
+        ImGui::SetCursorScreenPos(ImVec2(up.x, up.y + h + S(12)));
+    }
     if (update_ && !updDismissed_) {  // a newer release is out
         const ImVec2 up = ImGui::GetCursorScreenPos();
         const float h = S(42);
@@ -773,6 +811,8 @@ bool App::topBar(const char* title, const char* subtitle, bool showReset) {
         std::snprintf(b, sizeof(b), "TacAudio %s is available - you have %s. Your settings and profiles are kept.",
                       update_->version.c_str(), TAC_VERSION);
         dl->AddText(fonts.semibold, S(13.5f), up + ImVec2(S(40), S(12)), col::Text, b);
+        ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150) - S(140), S(4)));
+        if (pillButton("What's new", col::CardHi, col::Text, S(130))) page_ = kPageNotes;
         ImGui::SetCursorScreenPos(up + ImVec2(avail - S(34) - S(150), S(4)));
         if (pillButton("Download", col::Accent, IM_COL32(20, 14, 8, 255), S(140)))
             ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -1920,6 +1960,7 @@ void App::pollUpdates() {
             if (isNewerVersion(r.version, TAC_VERSION)) {
                 if (!update_ || update_->version != r.version) updDismissed_ = false;
                 update_ = r;
+                updNotes_ = parsePatchNotes(r.notes);
                 updStatus_ = "TacAudio " + r.version + " is available (you have " TAC_VERSION ").";
             } else {
                 update_.reset();
@@ -2463,6 +2504,9 @@ void App::pageAbout() {
     ui::text("Binaural 3D audio for 7.1 game sound: measured-head HRTFs, diffuse-field equalisation, room "
              "modelling, combat dynamics and footstep clarity.",
              col::Dim, 13.5f);
+    ImGui::Dummy(ImVec2(0, S(4)));
+    if (actionButton("What's new", true, true, S(160))) openNotes();
+    if (ImGui::IsItemHovered()) tooltip("Patch notes: new features and fixes in each version");
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
     beginCard("##credits", "Credits & licences", nullptr, 0);
@@ -2480,6 +2524,76 @@ void App::pageAbout() {
         ui::text(l[1], col::Dim, 13.0f);
     }
     endCard();
+}
+
+// ------------------------------------------------------------------ What's new (patch notes)
+void App::openNotes() {
+    page_ = kPageNotes;
+    if (justUpdated_) {
+        justUpdated_ = false;
+        cfg_.lastVersion = TAC_VERSION;
+        if (!preview_) saveSettings(cfg_);
+    }
+}
+
+void App::notesCard(const char* id, const std::string& title, const PatchVersion& v, bool skipInstall) {
+    beginCard(id, title.c_str(), nullptr, 0);
+    bool first = true;
+    for (const auto& s : v.sections) {
+        if (s.items.empty() || (skipInstall && s.title == "Install")) continue;
+        if (!first) ImGui::Dummy(ImVec2(0, S(4)));
+        first = false;
+        if (!s.title.empty()) {
+            const ImU32 c = s.title == "New" ? col::Accent : s.title == "Fixed" ? col::Green : col::Teal;
+            ui::text(s.title.c_str(), c, 14.0f, true);
+        }
+        for (const auto& item : s.items) {
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            ImGui::GetWindowDrawList()->AddCircleFilled(p + ImVec2(S(5), S(9)), S(2.5f), col::Dim);
+            ImGui::SetCursorScreenPos(p + ImVec2(S(16), 0));
+            ImGui::BeginGroup();
+            para(item.c_str(), col::Text, 13.5f);
+            ImGui::EndGroup();
+        }
+    }
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+}
+
+void App::pageNotes() {
+    topBar("What's new", "Patch notes: the new features and fixes in each version of TacAudio.");
+    if (update_) {  // what the newer release brings, before downloading it
+        PatchVersion v;
+        if (!updNotes_.empty()) v = updNotes_.front();
+        bool any = false;
+        for (const auto& s : v.sections)
+            any = any || (!s.items.empty() && s.title != "Install");
+        if (any) {
+            notesCard("##notes_up", "Available now: TacAudio " + update_->version, v, true);
+        } else {
+            beginCard("##notes_up", ("Available now: TacAudio " + update_->version).c_str(), nullptr, 0);
+            para("The notes for this version are on its download page.", col::Dim, 13.5f);
+            endCard();
+            ImGui::Dummy(ImVec2(0, S(6)));
+        }
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - S(2));
+        if (actionButton("Download", true, true, S(160)))
+            ShellExecuteW(nullptr, L"open", fromUtf8(update_->url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        ImGui::Dummy(ImVec2(0, S(14)));
+    }
+    if (notes_.empty()) {
+        para("No patch notes are built into this version.", col::Faint, 13.5f);
+        return;
+    }
+    for (std::size_t i = 0; i < notes_.size(); ++i) {
+        const PatchVersion& v = notes_[i];
+        if (v.empty()) continue;
+        std::string title = "Version " + v.version;
+        if (!v.label.empty()) title += "  -  " + v.label;
+        if (v.version == TAC_VERSION) title += "  (your version)";
+        const std::string id = "##notes" + std::to_string(i);
+        notesCard(id.c_str(), title, v, false);
+    }
 }
 
 }  // namespace tac
