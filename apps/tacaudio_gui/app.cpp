@@ -103,7 +103,6 @@ AppSettings loadSettings() {
             else if (k == "stepsOn") s.stepsOn = v == "1";
             else if (k == "stepsLevel") s.stepsLevel = std::stof(v);
             else if (k == "bass") s.sound.bassDb = std::stof(v);
-            else if (k == "stepsSmart") s.stepsSmart = v == "1";
             else if (k == "eqOn") s.eqOn = v == "1";
             else if (k == "eq") s.eqText = v;
             else if (k == "eqName") s.eqName = v;
@@ -165,7 +164,7 @@ void saveSettings(const AppSettings& s) {
       << "\nhead=" << s.sound.head << "\nroom=" << s.sound.room << "\npunch=" << s.sound.punch
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
-      << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
+      << "\nbass=" << s.sound.bassDb << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
@@ -182,7 +181,6 @@ SoundBundle bundleOf(const AppSettings& s) {
     b.dynPreset = s.dynPreset;
     b.stepsOn = s.stepsOn;
     b.stepsLevel = s.stepsLevel;
-    b.stepsSmart = s.stepsSmart;
     return b;
 }
 void applyBundle(AppSettings& s, const SoundBundle& b) {
@@ -191,7 +189,6 @@ void applyBundle(AppSettings& s, const SoundBundle& b) {
     s.dynPreset = b.dynPreset;
     s.stepsOn = b.stepsOn;
     s.stepsLevel = b.stepsLevel;
-    s.stepsSmart = b.stepsSmart;
 }
 }  // namespace
 
@@ -548,10 +545,10 @@ std::string App::apoIniText() const {
     char b[512];
     std::snprintf(b, sizeof(b),
                   "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
-                  "stepsLevel=%g\nstepsSmart=%d\nbass=%g\n",
+                  "stepsLevel=%g\nbass=%g\n",
                   wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
                   cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
-                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
+                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.sound.bassDb);
     return std::string(b) + "eq=" + cfg_.effective().eq + "\ncapture=" + std::to_string(std::max(0, captureId_)) + "\n";
 }
 
@@ -846,7 +843,6 @@ void App::pageSound() {
         cfg_.dynPreset = def.dynPreset;
         cfg_.stepsOn = def.stepsOn;
         cfg_.stepsLevel = def.stepsLevel;
-        cfg_.stepsSmart = def.stepsSmart;
         session_.setVolumeDb(cfg_.sound.volumeDb);
         session_.set3d(cfg_.sound.enabled3d);
         requestRebuild();
@@ -904,8 +900,7 @@ void App::pageSound() {
     ImGui::SameLine(0, gap);
     beginCard("##steps", "Footstep clarity", &cfg_.stepsOn, colW,
               "Lifts the footstep 'crunch' band around 3.5 kHz, only while a channel is quiet - "
-              "gun cracks in the same band are not boosted. Smart: only short impacts (steps, landings, reloads), "
-              "not rain, wind or engines.");
+              "gun cracks in the same band are not boosted.");
     if (cardToggleChanged()) requestRebuild();
     {
         const double fs = 48000.0;
@@ -933,9 +928,6 @@ void App::pageSound() {
                   "Amount of footstep clarity. +3 dB is subtle, +6 dB is clear, +9 dB and more is very strong.",
                   col::Teal) == Edit::Commit)
         requestRebuild();
-    if (toggleRow("Smart", &cfg_.stepsSmart, "Impacts only", def.stepsSmart)) requestRebuild();
-    if (ImGui::IsItemHovered())
-        tooltip("Boost only short impacts in the footstep band. Steady sounds there - rain, wind, engines - are not lifted.");
     endCard();
     ImGui::Dummy(ImVec2(0, gap - S(10)));
 
@@ -2418,7 +2410,7 @@ void App::pageProfiles() {
                 row("Room", b.sound.room.c_str());
                 std::snprintf(line, sizeof(line), "%s, punch %.0f", b.dynOn ? b.dynPreset.c_str() : "off", b.sound.punch);
                 row("Dynamics", line);
-                std::snprintf(line, sizeof(line), b.stepsOn ? (b.stepsSmart ? "+%.1f dB, smart" : "+%.1f dB") : "off",
+                std::snprintf(line, sizeof(line), b.stepsOn ? "+%.1f dB" : "off",
                               b.stepsLevel);
                 row("Footsteps", line);
                 std::snprintf(line, sizeof(line), "%+.1f dB", b.sound.bassDb);

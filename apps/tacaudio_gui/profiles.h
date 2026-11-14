@@ -18,14 +18,12 @@ struct SoundBundle {
     std::string dynPreset = "medium";
     bool stepsOn = true;
     float stepsLevel = 3.0f;
-    bool stepsSmart = true;
 
     bool operator==(const SoundBundle& o) const {
         return sound.head == o.sound.head && sound.room == o.sound.room && sound.punch == o.sound.punch &&
                sound.bassDb == o.sound.bassDb && sound.volumeDb == o.sound.volumeDb &&
                sound.enabled3d == o.sound.enabled3d && dynOn == o.dynOn && dynPreset == o.dynPreset &&
-               stepsOn == o.stepsOn && stepsLevel == o.stepsLevel &&
-               stepsSmart == o.stepsSmart;
+               stepsOn == o.stepsOn && stepsLevel == o.stepsLevel;
     }
 };
 

@@ -154,7 +154,6 @@ std::vector<GameProfile> loadProfiles(const SoundBundle& base) {
             else if (k == "stepsOn") b.stepsOn = val == "1";
             else if (k == "stepsLevel") b.stepsLevel = std::stof(val);
             else if (k == "bass") b.sound.bassDb = std::stof(val);
-            else if (k == "stepsSmart") b.stepsSmart = val == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -177,7 +176,7 @@ void saveProfiles(const std::vector<GameProfile>& profiles) {
           << "\nroom=" << b.sound.room << "\npunch=" << b.sound.punch << "\nvolume=" << b.sound.volumeDb
           << "\n3d=" << (b.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (b.dynOn ? 1 : 0) << "\ndynPreset=" << b.dynPreset
           << "\nstepsOn=" << (b.stepsOn ? 1 : 0) << "\nstepsLevel=" << b.stepsLevel
-          << "\nbass=" << b.sound.bassDb << "\nstepsSmart=" << (b.stepsSmart ? 1 : 0) << "\n\n";
+          << "\nbass=" << b.sound.bassDb << "\n\n";
     }
 }
 

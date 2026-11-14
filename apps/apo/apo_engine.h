@@ -34,7 +34,6 @@ struct ApoSettings {
     std::string dynamics = "medium";  // "off" when combat dynamics are switched off
     float punch = 60.0f;
     float footstepsDb = 3.0f;         // 0 when footstep clarity is off
-    bool footstepsSmart = true;       // short impacts only
     std::string eq;                   // headphone EQ (compact form), "" = off
     float bassDb = 0.0f;
     float volumeDb = -6.0f;
@@ -44,7 +43,7 @@ struct ApoSettings {
 
     bool needsRebuild(const ApoSettings& o) const {
         return head != o.head || room != o.room || dynamics != o.dynamics || punch != o.punch ||
-               footstepsDb != o.footstepsDb || footstepsSmart != o.footstepsSmart || bassDb != o.bassDb ||
+               footstepsDb != o.footstepsDb || bassDb != o.bassDb ||
                eq != o.eq;
     }
 };

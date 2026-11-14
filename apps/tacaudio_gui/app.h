@@ -32,7 +32,6 @@ struct AppSettings {
     std::string dynPreset = "medium";
     bool stepsOn = true;
     float stepsLevel = 3.0f;
-    bool stepsSmart = true;
 
     // Headphone EQ (the same for every game profile: it belongs to the headphones).
     bool eqOn = false;
@@ -58,7 +57,6 @@ struct AppSettings {
         SoundSettings s = sound;
         s.dynamics = dynOn ? dynPreset : "off";
         s.footstepsDb = stepsOn ? stepsLevel : 0.0f;
-        s.footstepsSmart = stepsSmart;
         s.eq = eqOn ? eqText : std::string();
         return s;
     }
