@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://sa3oodi.github.io/TacAudio-engine/"><b>Website</b></a> &middot;
+  <a href="https://github.com/sa3oodi/TacAudio-engine/releases/latest"><b>Download</b></a> &middot;
+  <a href="CHANGELOG.md"><b>What's new</b></a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0b84d8" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/C%2B%2B-20-00599c" alt="C++20">
   <img src="https://img.shields.io/badge/version-0.6.0-ff7a1a" alt="version 0.6.0">
