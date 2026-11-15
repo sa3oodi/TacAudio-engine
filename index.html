@@ -1,5 +1,512 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
-<title>TacAudio downloads</title>
-<meta http-equiv="refresh" content="0; url=https://github.com/sa3oodi/TacAudio-engine/releases/latest">
-<p>TacAudio installers. Latest release: <a href="https://github.com/sa3oodi/TacAudio-engine/releases/latest">GitHub Releases</a>.</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TacAudio: spatial 3D audio for competitive gaming</title>
+<meta name="description" content="Free, open-source spatial 3D audio for Windows. Turns your game's 7.1 into precise binaural sound on any headphones, lifts footsteps and tames gunfire. No virtual cable, about 4 ms delay.">
+<meta name="theme-color" content="#12151b">
+<link rel="icon" type="image/png" href="assets/logo.png">
+<link rel="canonical" href="https://sa3oodi.github.io/TacAudio-engine/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="TacAudio: hear where they are">
+<meta property="og:description" content="Free, open-source spatial 3D audio for competitive gaming on Windows. Precise direction, clean footsteps, tamed gunfire, on any headphones.">
+<meta property="og:url" content="https://sa3oodi.github.io/TacAudio-engine/">
+<meta property="og:image" content="https://sa3oodi.github.io/TacAudio-engine/assets/screenshot-sound.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0e1116;
+  --bg2: #12151b;
+  --card: #191d25;
+  --card-hi: #20252f;
+  --line: #2a303b;
+  --text: #e9ecf1;
+  --muted: #9aa3b2;
+  --dim: #6b7383;
+  --orange: #ff7a1a;
+  --orange-2: #ff9a4a;
+  --teal: #2fe3c4;
+  --radius: 16px;
+  --max: 1160px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: var(--orange-2); text-decoration: none; }
+a:hover { text-decoration: underline; }
+img { max-width: 100%; height: auto; display: block; }
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 20px; }
+.grid > *, .steps > *, .stats > *, .split > * { min-width: 0; }
+section { padding: 96px 0; }
+h1, h2, h3 { line-height: 1.15; margin: 0; letter-spacing: -0.02em; }
+h2 { font-size: clamp(28px, 4vw, 40px); font-weight: 800; }
+.eyebrow {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--orange); margin-bottom: 14px;
+}
+.lead { color: var(--muted); font-size: 18px; max-width: 640px; }
+.center { text-align: center; }
+.center .lead { margin-left: auto; margin-right: auto; }
+
+/* nav */
+nav {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(14, 17, 22, 0.82);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 18px; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 30px; height: 30px; border-radius: 8px; }
+.navlinks { display: flex; gap: 24px; margin-left: auto; }
+.navlinks a { color: var(--muted); font-size: 14px; font-weight: 500; }
+.navlinks a:hover { color: var(--text); text-decoration: none; }
+.navlinks { align-items: center; }
+.navlinks a.nav-cta { padding: 8px 16px; font-size: 14px; color: #1a0d02; font-weight: 600; }
+.navlinks a.nav-cta:hover { color: #1a0d02; }
+
+/* buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 14px 24px; border-radius: 999px; font-weight: 600; font-size: 16px;
+  border: 1px solid transparent; transition: transform .15s, box-shadow .15s, background .15s;
+  cursor: pointer; white-space: nowrap;
+}
+.btn:hover { text-decoration: none; transform: translateY(-1px); }
+.btn-primary { background: var(--orange); color: #1a0d02; box-shadow: 0 8px 30px -8px rgba(255,122,26,.6); }
+.btn-primary:hover { background: var(--orange-2); box-shadow: 0 10px 36px -8px rgba(255,122,26,.75); }
+.btn-ghost { background: var(--card); color: var(--text); border-color: var(--line); }
+.btn-ghost:hover { background: var(--card-hi); }
+.btn svg { width: 18px; height: 18px; flex: none; }
+
+/* hero */
+.hero { position: relative; padding: 88px 0 40px; overflow: hidden; }
+.hero::before {
+  content: ""; position: absolute; inset: -20% -10% auto; height: 760px; z-index: -1;
+  background:
+    radial-gradient(600px 380px at 50% 10%, rgba(255,122,26,.20), transparent 70%),
+    radial-gradient(500px 300px at 80% 40%, rgba(47,227,196,.08), transparent 70%);
+}
+.rings {
+  position: absolute; left: 50%; top: 40px; transform: translateX(-50%);
+  width: 900px; height: 900px; z-index: -1; opacity: .35; pointer-events: none;
+}
+.rings span {
+  position: absolute; inset: 0; margin: auto; border-radius: 50%;
+  border: 1px solid rgba(255,122,26,.35);
+  animation: ping 6s linear infinite;
+}
+.rings span:nth-child(2) { animation-delay: 2s; }
+.rings span:nth-child(3) { animation-delay: 4s; }
+@keyframes ping { from { transform: scale(.15); opacity: 1; } to { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .rings span { animation: none; opacity: .3; } .rings span:nth-child(2) { transform: scale(.55); } .rings span:nth-child(3) { transform: scale(.85); } }
+.hero-logo { width: 84px; height: 84px; border-radius: 22px; margin: 0 auto 28px; box-shadow: 0 16px 50px -12px rgba(255,122,26,.5); }
+.hero h1 { font-size: clamp(40px, 7vw, 76px); font-weight: 800; letter-spacing: -0.035em; }
+.hero h1 .hl {
+  background: linear-gradient(90deg, var(--orange), #ffb070);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero .lead { font-size: clamp(17px, 2.2vw, 20px); margin-top: 22px; }
+.cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 36px; }
+.meta { color: var(--dim); font-size: 13px; margin-top: 16px; }
+.meta b { color: var(--muted); font-weight: 600; }
+.badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+.badge {
+  font-size: 13px; color: var(--muted); padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--line);
+}
+.badge i { font-style: normal; color: var(--teal); margin-right: 6px; }
+.shot {
+  margin: 64px auto 0; max-width: 1000px; border-radius: 18px; overflow: hidden;
+  border: 1px solid var(--line);
+  box-shadow: 0 40px 120px -30px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.03), 0 -20px 80px -40px rgba(255,122,26,.35);
+}
+
+/* stats */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 72px; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; text-align: center; }
+.stat b { display: block; font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: var(--text); }
+.stat span { color: var(--muted); font-size: 14px; }
+
+/* problem / solution */
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+.split p { color: var(--muted); }
+.diagram { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 28px; }
+.diagram svg { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 18px; justify-content: center; margin-top: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+
+/* features */
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 52px; }
+.card {
+  background: linear-gradient(180deg, var(--card), var(--bg2));
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 26px;
+  transition: border-color .2s, transform .2s;
+}
+.card:hover { border-color: rgba(255,122,26,.45); transform: translateY(-2px); }
+.card .ic {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: rgba(255,122,26,.12); color: var(--orange); margin-bottom: 18px;
+}
+.card .ic.t { background: rgba(47,227,196,.12); color: var(--teal); }
+.card .ic svg { width: 22px; height: 22px; }
+.card h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+.card p { color: var(--muted); margin: 0; font-size: 15px; }
+
+/* screenshots */
+.tabs { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 40px; }
+.tab {
+  background: var(--card); color: var(--muted); border: 1px solid var(--line);
+  padding: 9px 18px; border-radius: 999px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab[aria-selected="true"] { background: var(--orange); color: #1a0d02; border-color: var(--orange); }
+.gallery { margin: 28px auto 0; max-width: 1000px; }
+.gallery figure { margin: 0; display: none; }
+.gallery figure.on { display: block; }
+.gallery img { border-radius: 16px; border: 1px solid var(--line); margin: 0 auto; box-shadow: 0 30px 90px -30px rgba(0,0,0,.9); }
+.gallery figcaption { text-align: center; color: var(--muted); font-size: 15px; margin-top: 18px; }
+
+/* steps */
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 52px; counter-reset: s; }
+.step { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 26px; position: relative; }
+.step::before {
+  counter-increment: s; content: counter(s);
+  display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
+  background: var(--orange); color: #1a0d02; font-weight: 800; margin-bottom: 16px;
+}
+.step h3 { font-size: 17px; margin-bottom: 6px; }
+.step p { color: var(--muted); margin: 0; font-size: 15px; }
+.note {
+  margin-top: 28px; padding: 16px 20px; border-radius: 12px; font-size: 14px; color: var(--muted);
+  background: rgba(255,122,26,.06); border: 1px solid rgba(255,122,26,.25);
+}
+.note b { color: var(--text); }
+
+/* faq */
+.faq { max-width: 820px; margin: 48px auto 0; }
+details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 12px; overflow: hidden; }
+summary { cursor: pointer; padding: 18px 22px; font-weight: 600; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--orange); font-size: 22px; line-height: 1; transition: transform .2s; }
+details[open] summary::after { transform: rotate(45deg); }
+details p { margin: 0; padding: 0 22px 20px; color: var(--muted); }
+code { background: var(--bg); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; font-size: .9em; color: var(--text); }
+
+/* final cta */
+.final {
+  text-align: center; border-radius: 24px; padding: 72px 24px;
+  background: radial-gradient(500px 240px at 50% 0%, rgba(255,122,26,.25), transparent 70%), var(--card);
+  border: 1px solid var(--line);
+}
+.final .lead { margin: 16px auto 0; }
+
+footer { border-top: 1px solid var(--line); padding: 36px 0 48px; color: var(--dim); font-size: 14px; }
+footer .wrap { display: flex; gap: 24px; justify-content: space-between; flex-wrap: wrap; align-items: center; }
+footer nav { position: static; background: none; border: 0; backdrop-filter: none; }
+footer .links { display: flex; gap: 20px; flex-wrap: wrap; }
+footer .links a { color: var(--muted); }
+
+@media (max-width: 960px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+  .steps { grid-template-columns: repeat(2, 1fr); }
+  .split { grid-template-columns: 1fr; gap: 36px; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .tab { padding: 8px 14px; font-size: 13px; }
+  .stat b { font-size: 26px; }
+  section { padding: 72px 0; }
+  .wrap { padding: 0 16px; }
+  .navlinks a:not(.nav-cta) { display: none; }
+  .grid, .steps { grid-template-columns: 1fr; }
+  .hero { padding-top: 56px; }
+  .rings { width: 600px; height: 600px; }
+  .btn { width: 100%; }
+  .nav-cta { width: auto; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="assets/logo.png" alt="">TacAudio</a>
+    <div class="navlinks">
+      <a href="#features">Features</a>
+      <a href="#screens">Screenshots</a>
+      <a href="#setup">Setup</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/sa3oodi/TacAudio-engine">GitHub</a>
+      <a class="btn btn-primary nav-cta dl-link" href="https://github.com/sa3oodi/TacAudio-engine/releases/latest">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero center" id="top">
+  <div class="rings" aria-hidden="true"><span></span><span></span><span></span></div>
+  <div class="wrap">
+    <img class="hero-logo" src="assets/logo.png" alt="TacAudio logo">
+    <h1>Hear <span class="hl">where they are.</span></h1>
+    <p class="lead">TacAudio turns your game's 7.1 surround into precise 3D sound on any headphones. It also lifts quiet footsteps and turns down loud gunfire. Free and open source, for Windows 10 and 11.</p>
+    <div class="cta">
+      <a class="btn btn-primary dl-link" href="https://github.com/sa3oodi/TacAudio-engine/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+        <span class="dl-label">Download for Windows</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/sa3oodi/TacAudio-engine">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z"/></svg>
+        View source
+      </a>
+    </div>
+    <p class="meta"><span class="dl-meta">Free · MIT licence · Windows 10 / 11 (64-bit)</span></p>
+    <div class="badges">
+      <span class="badge"><i>●</i>No virtual cable</span>
+      <span class="badge"><i>●</i>About 4 ms delay</span>
+      <span class="badge"><i>●</i>Any headphones</span>
+      <span class="badge"><i>●</i>No account, no ads</span>
+    </div>
+    <div class="shot"><img src="assets/screenshot-sound.png" width="1184" height="881" alt="TacAudio Sound page: spatial audio, combat dynamics and footstep clarity"></div>
+
+    <div class="stats">
+      <div class="stat"><b>~4 ms</b><span>added delay</span></div>
+      <div class="stat"><b>7.1 → 3D</b><span>8 channels, measured HRTFs</span></div>
+      <div class="stat"><b>0–12 dB</b><span>footstep clarity</span></div>
+      <div class="stat"><b>$0</b><span>free and open source</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap split">
+    <div>
+      <div class="eyebrow">Why it matters</div>
+      <h2>Stereo can't tell you if they're in front or behind.</h2>
+      <p>Shooters like Battlefield and Call of Duty mix their sound in 7.1 surround. On headphones you usually get a flat stereo version of it, so an enemy behind you sounds almost the same as one in front.</p>
+      <p>TacAudio places each of the game's speakers around your head using <b>measured dummy-head recordings (HRTFs)</b>. Your brain hears that as real direction: front, back, sides and diagonals. TacAudio then cleans up the mix for competitive play, so loud guns stop drowning out quiet footsteps.</p>
+    </div>
+    <div class="diagram">
+      <svg viewBox="0 0 360 300" role="img" aria-label="Seven virtual speakers placed in a circle around the listener's head">
+        <defs>
+          <radialGradient id="g" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#ff7a1a" stop-opacity=".22"/><stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/></radialGradient>
+        </defs>
+        <circle cx="180" cy="150" r="130" fill="url(#g)"/>
+        <circle cx="180" cy="150" r="110" fill="none" stroke="#2a303b" stroke-dasharray="4 6"/>
+        <circle cx="180" cy="150" r="70" fill="none" stroke="#2a303b" stroke-dasharray="4 6"/>
+        <!-- head -->
+        <ellipse cx="180" cy="150" rx="22" ry="26" fill="#20252f" stroke="#9aa3b2" stroke-width="1.5"/>
+        <path d="M172 125 l8 -10 l8 10" fill="none" stroke="#9aa3b2" stroke-width="1.5" stroke-linejoin="round"/>
+        <rect x="155" y="142" width="5" height="16" rx="2" fill="#9aa3b2"/>
+        <rect x="200" y="142" width="5" height="16" rx="2" fill="#9aa3b2"/>
+        <!-- speakers: FL FC FR SL SR BL BR -->
+        <g fill="#ff7a1a">
+          <circle cx="142" cy="46" r="9"/><circle cx="180" cy="40" r="9"/><circle cx="218" cy="46" r="9"/>
+          <circle cx="72" cy="150" r="9"/><circle cx="288" cy="150" r="9"/>
+          <circle cx="117" cy="241" r="9"/><circle cx="243" cy="241" r="9"/>
+        </g>
+        <g fill="#9aa3b2" font-size="10" font-family="Inter, sans-serif" text-anchor="middle" font-weight="600">
+          <text x="128" y="28">FL</text><text x="180" y="22">C</text><text x="232" y="28">FR</text>
+          <text x="46" y="154">SL</text><text x="314" y="154">SR</text>
+          <text x="100" y="272">BL</text><text x="260" y="272">BR</text>
+        </g>
+        <!-- footstep ping from back-right -->
+        <g stroke="#2fe3c4" fill="none" stroke-width="2" stroke-linecap="round">
+          <path d="M268 210 a22 22 0 0 1 -12 26" opacity=".9"/>
+          <path d="M278 202 a36 36 0 0 1 -20 44" opacity=".55"/>
+          <path d="M288 194 a50 50 0 0 1 -28 62" opacity=".3"/>
+        </g>
+        <circle cx="243" cy="241" r="4" fill="#2fe3c4"/>
+      </svg>
+      <div class="legend"><span style="--c:#ff7a1a">Game's 7.1 speakers</span><span style="--c:#2fe3c4">A footstep behind you, on the right</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="background: var(--bg2);">
+  <div class="wrap center">
+    <div class="eyebrow">Features</div>
+    <h2>Made for competitive play.</h2>
+    <p class="lead">Every option changes the sound live while you play, and you can reset each one.</p>
+  </div>
+  <div class="wrap grid">
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="8"/></svg></div>
+      <h3>True 3D direction</h3>
+      <p>Measured SADIE II dummy heads (KEMAR, Neumann KU100), plus 18 optional human heads. Each one is equalised to sound neutral.</p>
+    </div>
+    <div class="card">
+      <div class="ic t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20c-1.5 0-3-1-3-3.5S5.5 12 7 12s2.5 1.5 2.5 4S8.5 20 7 20zM16 13c-1.5 0-2.5-1.5-2.5-4S14.5 4 16 4s3 1 3 3.5-1.5 5.5-3 5.5z"/></svg></div>
+      <h3>Footstep clarity</h3>
+      <p>Boosts the footstep "crunch" around 3.5 kHz, only when that sound is quiet. Loud gun cracks in the same range aren't boosted. Smart mode boosts only short impacts like steps, landings and reloads.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 3 9-9"/><path d="M3 21h18"/></svg></div>
+      <h3>Combat dynamics</h3>
+      <p>Turns down gunfire, explosions and killstreaks and lifts quiet sounds. Each channel is handled on its own, so a gun on your left never quiets the steps behind you. The Punch control keeps your shots feeling solid.</p>
+    </div>
+    <div class="card">
+      <div class="ic t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
+      <h3>Direct mode</h3>
+      <p>The engine runs inside Windows audio on your headphones. You don't need a virtual cable, it adds about 4 ms of delay, and it keeps working after you close the app.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M6 12h4M8 10v4M15 11h.01M18 13h.01"/></svg></div>
+      <h3>Game profiles</h3>
+      <p>Finds your Steam and Epic games on its own, and you can add others yourself. Each game gets its own sound, and TacAudio switches to it when that game comes to the front.</p>
+    </div>
+    <div class="card">
+      <div class="ic t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1v-6h3zM3 19a2 2 0 0 0 2 2h1v-6H3z"/></svg></div>
+      <h3>Find your head</h3>
+      <p>A 2-minute listening test. You click where you hear footsteps coming from, and TacAudio picks the head that gives you the most accurate directions.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg></div>
+      <h3>Headphone EQ</h3>
+      <p>Import a correction curve for your headphone model in AutoEq / Equalizer APO format, from a file or by pasting it. It's applied after the 3D processing.</p>
+    </div>
+    <div class="card">
+      <div class="ic t"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>
+      <h3>Instant A/B</h3>
+      <p>Press Ctrl + Alt + F9 to switch 3D on and off and compare it with plain stereo. Ctrl + Alt + F10 turns TacAudio on and off.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg></div>
+      <h3>One-click updates</h3>
+      <p>When a new version comes out, click Update now. TacAudio replaces the old app and engine and keeps your settings, profiles and EQ.</p>
+    </div>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="wrap center">
+    <div class="eyebrow">Screenshots</div>
+    <h2>A clean, dark app that stays out of your way.</h2>
+    <p class="lead">It lives in the tray, starts with Windows if you want, and has global hotkeys.</p>
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-i="0">Profiles</button>
+      <button class="tab" role="tab" aria-selected="false" data-i="1">Setup</button>
+      <button class="tab" role="tab" aria-selected="false" data-i="2">Devices</button>
+      <button class="tab" role="tab" aria-selected="false" data-i="3">Performance</button>
+      <button class="tab" role="tab" aria-selected="false" data-i="4">Settings</button>
+    </div>
+    <div class="gallery">
+      <figure class="on"><img loading="lazy" src="assets/screenshot-profiles.png" alt="Profiles page"><figcaption>Your game library. Each game has its own sound and switches in automatically.</figcaption></figure>
+      <figure><img loading="lazy" src="assets/screenshot-setup.png" alt="Setup assistant"><figcaption>The Setup assistant installs the engine and shows live whether your game is sending 7.1.</figcaption></figure>
+      <figure><img loading="lazy" src="assets/screenshot-devices.png" alt="Devices page"><figcaption>Where the engine is installed, plus your headphone EQ.</figcaption></figure>
+      <figure><img loading="lazy" src="assets/screenshot-performance.png" alt="Performance page"><figcaption>Live levels for all 8 of the game's speakers, and how much sound is turned down or lifted.</figcaption></figure>
+      <figure><img loading="lazy" src="assets/screenshot-settings.png" alt="Settings page"><figcaption>Startup, tray, hotkeys, accessibility and the update check.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="setup" style="background: var(--bg2);">
+  <div class="wrap center">
+    <div class="eyebrow">Setup</div>
+    <h2>Ready in about a minute.</h2>
+    <p class="lead">The Setup assistant opens the first time you start TacAudio and walks you through each step.</p>
+  </div>
+  <div class="wrap">
+    <div class="steps">
+      <div class="step"><h3>Install TacAudio</h3><p>Run the installer. It installs just for you, so it doesn't need administrator rights, and it adds a normal uninstaller in Windows Settings.</p></div>
+      <div class="step"><h3>Pick your headphones</h3><p>Choose your headphones and click <b>Install engine</b>. Windows asks for permission once, and sound pauses for a few seconds.</p></div>
+      <div class="step"><h3>Set the game to 7.1</h3><p>In your game's audio settings, choose 7.1 / Surround / Home theater. Turn off the game's own 3D headphone mode.</p></div>
+      <div class="step"><h3>Play</h3><p>The assistant shows <b>"Your game is sending 7.1"</b>. That's it, and you can tune everything live from there.</p></div>
+    </div>
+    <div class="note"><b>Windows SmartScreen warning?</b> TacAudio doesn't have a code-signing certificate yet, so Windows may warn you before it runs. Click <b>More info → Run anyway</b>. The full source code and the build that makes each installer are public on GitHub.</div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap center">
+    <div class="eyebrow">FAQ</div>
+    <h2>Questions</h2>
+  </div>
+  <div class="wrap faq">
+    <details><summary>Is it really free?</summary><p>Yes. TacAudio is open source under the MIT licence. It has no account, no ads, no telemetry and no paid tier.</p></details>
+    <details><summary>Will it get me banned?</summary><p>TacAudio doesn't touch the game at all. It doesn't inject anything, read memory or hook the game. It's a Windows audio effect on your headphones, the same kind of thing as the sound effects that come with headsets. We tested it in Call of Duty with no anti-cheat problems. The optional footstep ring is an on-screen sound visualisation, though, and some games and tournaments don't allow those. Check the rules before you turn it on in competitive play.</p></details>
+    <details><summary>Which games work?</summary><p>Any game that can output 7.1 or surround sound gets full 3D. That includes most modern shooters, such as Battlefield, Call of Duty and Warzone. Stereo games and apps still get the footstep, dynamics and EQ processing, but no surround directions.</p></details>
+    <details><summary>Which headphones work?</summary><p>Any wired, USB or wireless headphones that show up in Windows as a sound device. If you also import your model's EQ, it'll sound even more neutral.</p></details>
+    <details><summary>The app says "waiting for game audio" and the game only offers stereo.</summary><p>Windows' <b>Audio enhancements</b> must be turned on for your headphones (they're on by default). Go to Settings → System → Sound → your headphones → Audio enhancements and set it to <b>Device Default Effects</b>. Also make sure the game outputs to the same device and is set to 7.1.</p></details>
+    <details><summary>Does it affect Discord or my browser?</summary><p>The engine processes everything you play on that headphone device. Stereo apps stay stereo and just get the same sound settings. You can turn everything off with Ctrl + Alt + F10.</p></details>
+    <details><summary>How do I uninstall it?</summary><p>Click <b>Remove engine</b> in the Setup assistant, or uninstall TacAudio from Windows Settings → Apps. Either way, your device's original Windows effects come back exactly as they were.</p></details>
+    <details><summary>Does it connect to the internet?</summary><p>It makes one request: an update check to GitHub that asks if there's a newer release. That's all it sends.</p></details>
+  </div>
+</section>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="final">
+      <h2>Stop guessing. Start hearing.</h2>
+      <p class="lead">Free, open source and ready in about a minute.</p>
+      <div class="cta">
+        <a class="btn btn-primary dl-link" href="https://github.com/sa3oodi/TacAudio-engine/releases/latest">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+          <span class="dl-label">Download for Windows</span>
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/sa3oodi/TacAudio-engine/blob/main/CHANGELOG.md">What's new</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div><a class="brand" href="#top" style="font-size:16px"><img src="assets/logo.png" alt="" style="width:24px;height:24px;border-radius:6px">TacAudio</a>
+      <div style="margin-top:8px">Open source under the MIT licence. Not affiliated with any game publisher.</div></div>
+    <div class="links">
+      <a href="https://github.com/sa3oodi/TacAudio-engine">GitHub</a>
+      <a href="https://github.com/sa3oodi/TacAudio-engine/releases">Releases</a>
+      <a href="https://github.com/sa3oodi/TacAudio-engine/issues">Report a problem</a>
+      <a href="https://github.com/sa3oodi/TacAudio-engine/blob/main/LICENSE">Licence</a>
+      <a href="https://github.com/sa3oodi/TacAudio-engine/blob/main/THIRD_PARTY_NOTICES.md">Credits</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Screenshot tabs
+(function () {
+  var tabs = document.querySelectorAll('.tab');
+  var figs = document.querySelectorAll('.gallery figure');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.setAttribute('aria-selected', 'false'); });
+      figs.forEach(function (f) { f.classList.remove('on'); });
+      t.setAttribute('aria-selected', 'true');
+      figs[+t.dataset.i].classList.add('on');
+    });
+  });
+})();
+
+// Point the download buttons straight at the newest installer (falls back to the Releases page).
+(function () {
+  fetch('https://api.github.com/repos/sa3oodi/TacAudio-engine/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+    .then(function (rel) {
+      var a = (rel.assets || []).find(function (x) { return /^TacAudio-Setup-.*\.exe$/i.test(x.name); });
+      if (!a) return;
+      var ver = (rel.tag_name || '').replace(/^v/, '');
+      var mb = (a.size / 1048576).toFixed(1);
+      document.querySelectorAll('.dl-link').forEach(function (el) { el.href = a.browser_download_url; });
+      document.querySelectorAll('.dl-label').forEach(function (el) { el.textContent = 'Download TacAudio ' + ver; });
+      document.querySelectorAll('.dl-meta').forEach(function (el) {
+        el.innerHTML = '<b>Version ' + ver + '</b> · ' + mb + ' MB · Windows 10 / 11 (64-bit) · Free, MIT licence';
+      });
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>
