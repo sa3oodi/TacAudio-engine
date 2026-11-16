@@ -1313,7 +1313,8 @@ void App::pageSettings() {
     ImGui::BeginChild("##accrows", ImVec2(rowW, S(285)), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
     toggleRow("Footstep ring (experimental)", &cfg_.overlayOn,
               "Glows towards enemy footsteps. Your own sounds are ignored. Experimental: it can miss steps or react to "
-              "other short sounds.",
+              "other short sounds. A window on top of the game can cost some FPS in fullscreen games; turn it off if "
+              "you notice a drop.",
               def.overlayOn);
     ImGui::BeginDisabled(!cfg_.overlayOn);
     {

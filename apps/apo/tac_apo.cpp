@@ -451,6 +451,7 @@ public:
         inCh_ = fi.dwSamplesPerFrame;
         outCh_ = fo.dwSamplesPerFrame;
         inMask_ = fi.dwChannelMask;
+        rate_ = fi.fFramesPerSecond;
         silence_.assign(static_cast<size_t>(in[0]->u32MaxFrameCount) * inCh_, 0.0f);
         try {
             engine_ = std::make_unique<tac::apo::ApoEngine>(fi.fFramesPerSecond, inCh_, inMask_, moduleDir(), settingsPath(),
@@ -479,9 +480,28 @@ public:
     STDMETHODIMP_(void) APOProcess(UINT32 nIn, APO_CONNECTION_PROPERTY** in, UINT32 nOut,
                                    APO_CONNECTION_PROPERTY** out) override {
         if (nIn < 1 || nOut < 1 || !in[0] || !out[0]) return;
+        // How long each call takes (for the log): Windows must finish every stream's effects
+        // within one buffer period, or the sound breaks up.
+        LARGE_INTEGER t0, t1;
+        QueryPerformanceCounter(&t0);
+        processInner(in, out);
+        QueryPerformanceCounter(&t1);
+        const auto dt = static_cast<unsigned long long>(t1.QuadPart - t0.QuadPart);
+        procTicks_.fetch_add(dt, std::memory_order_relaxed);
+        procCalls_.fetch_add(1, std::memory_order_relaxed);
+        unsigned long long mx = procMax_.load(std::memory_order_relaxed);
+        while (dt > mx && !procMax_.compare_exchange_weak(mx, dt, std::memory_order_relaxed)) {
+        }
+        lastFrames_.store(in[0]->u32ValidFrameCount, std::memory_order_relaxed);
+    }
+    STDMETHODIMP_(UINT32) CalcInputFrames(UINT32 outFrames) override { return outFrames; }
+    STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inFrames) override { return inFrames; }
+
+private:
+    void processInner(APO_CONNECTION_PROPERTY** in, APO_CONNECTION_PROPERTY** out) noexcept {
         const UINT32 n = in[0]->u32ValidFrameCount;
         auto* dst = reinterpret_cast<float*>(out[0]->pBuffer);
-        if (engine_) {  // TacAudio: keeps running on silent input (reverb / filter tails)
+        if (engine_) {  // TacAudio: runs on through silence (reverb / filter tails), then idles
             const bool valid = in[0]->u32BufferFlags == BUFFER_VALID;
             const auto* src = valid ? reinterpret_cast<const float*>(in[0]->pBuffer) : silence_.data();
             if (valid) trackPeaks(src, n);
@@ -523,10 +543,7 @@ public:
         out[0]->u32BufferFlags = BUFFER_VALID;
         frames_ += n;
     }
-    STDMETHODIMP_(UINT32) CalcInputFrames(UINT32 outFrames) override { return outFrames; }
-    STDMETHODIMP_(UINT32) CalcOutputFrames(UINT32 inFrames) override { return inFrames; }
 
-private:
     // Per-channel peaks for the log (real time: atomics only).
     void trackPeaks(const float* src, UINT32 n) noexcept {
         float pk[kMaxCh] = {};
@@ -565,11 +582,23 @@ private:
                 writeStatusIfDue();
                 if (steady_clock::now() < next) continue;
                 next += seconds(10);
-                char b[256];
+                char b[384];
                 int len = std::snprintf(b, sizeof(b), "levels (dBFS) over 10 s, %llu frames:", frames_.load());
                 for (UINT32 c = 0; c < inCh_ && len < static_cast<int>(sizeof(b)) - 12; ++c) {
                     const float p = peak_[c].exchange(0.0f);
                     len += std::snprintf(b + len, sizeof(b) - len, " %.0f", p > 1e-6f ? 20.0f * std::log10(p) : -120.0f);
+                }
+                {  // processing time per call vs the buffer it has to fit in
+                    LARGE_INTEGER f;
+                    QueryPerformanceFrequency(&f);
+                    const unsigned long long ticks = procTicks_.exchange(0), mx = procMax_.exchange(0);
+                    const unsigned calls = procCalls_.exchange(0);
+                    const double toMs = 1000.0 / static_cast<double>(f.QuadPart);
+                    if (calls && len < static_cast<int>(sizeof(b)) - 80)
+                        len += std::snprintf(b + len, sizeof(b) - len, " | cpu %.3f ms avg, %.3f ms max per %.1f ms buffer%s",
+                                             ticks * toMs / calls, mx * toMs,
+                                             rate_ > 0 ? 1000.0 * lastFrames_.load() / rate_ : 0.0,
+                                             engine_ && !engine_->rendering() ? " (3D idle)" : "");
                 }
                 logLine("%s", b);
             }
@@ -588,6 +617,9 @@ private:
     DWORD inMask_ = 0;
     bool locked_ = false;
     std::atomic<unsigned long long> frames_{0};
+    std::atomic<unsigned long long> procTicks_{0}, procMax_{0};  // QPC ticks in APOProcess
+    std::atomic<unsigned> procCalls_{0}, lastFrames_{0};
+    double rate_ = 0.0;
     std::atomic<float> peak_[kMaxCh] = {};
     std::thread logger_;
     std::unique_ptr<tac::apo::ApoEngine> engine_;

@@ -81,8 +81,15 @@ public:
     static constexpr double kStereoHoldSec = 10.0;  // surround-free time before a stream goes clean
     static constexpr float kAudible = 1e-4f;        // -80 dBFS: a channel "carries sound"
 
+    static constexpr double kIdleSec = 5.0;         // digital silence before a stream stops rendering
+    static constexpr float kSilent = 1e-7f;         // below this a block counts as digital silence
+
     // 1 = this stream gets TacAudio's sound, 0 = passed through clean, -1 = nothing heard yet.
     int mode() const noexcept { return mode_.load(std::memory_order_relaxed); }
+    // Whether the last block ran the 3D renderer. It is skipped whenever its sound is not used:
+    // clean streams (stereo apps, voice calls), TacAudio or 3D switched off, and streams silent
+    // for kIdleSec. The output is the same; it just saves the CPU time.
+    bool rendering() const noexcept { return rendering_.load(std::memory_order_relaxed); }
 
 private:
     void worker();
@@ -120,6 +127,9 @@ private:
     bool decided_ = false;                      // the first audible block sets mixProc_ directly
     bool surround_ = false;                     // surround content seen within the hold time
     std::size_t holdBlocks_ = 0, holdMax_ = 0;
+    std::size_t silentBlocks_ = 0, idleMax_ = 0;  // consecutive digitally silent blocks
+    bool renderedLast_ = false;                   // the renderers ran in the previous block
+    std::atomic<bool> rendering_{false};
     const bool comms_;
     int statBlocks_ = 0;
     Limiter limiter_;

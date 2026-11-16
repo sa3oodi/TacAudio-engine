@@ -94,6 +94,7 @@ enum : UINT { kMenuOpen = 100, kMenuPower, kMenu3d, kMenuExit };
 App* g_app = nullptr;
 HWND g_hwnd = nullptr;
 bool g_visible = true;
+bool g_occluded = false;  // the last Present() found nothing of the window on screen
 bool g_quitting = false;
 bool g_hotkeysOn = false;
 NOTIFYICONDATAW g_tray{};
@@ -433,12 +434,20 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
                     lastTip = std::chrono::steady_clock::now();
                 }
             }
-            if (!g_visible && !smoke) {  // tray mode: no rendering, just keep the engine supervised
+            // Nothing to draw - in the tray, minimised, or covered (e.g. by a fullscreen game, or the
+            // screen is locked): no rendering, just keep the engine supervised. Present() does not
+            // wait for the screen in these cases, so drawing on would spin a CPU core flat out.
+            if (!smoke && g_occluded && g_swapChain->Present(0, DXGI_PRESENT_TEST) != DXGI_STATUS_OCCLUDED)
+                g_occluded = false;
+            if (!smoke && (!g_visible || IsIconic(hwnd) || g_occluded)) {
                 MsgWaitForMultipleObjects(0, nullptr, FALSE, app.wantsFastTick() ? 30 : 100, QS_ALLINPUT);
                 app.tick();
                 if (app.wantsQuit()) break;  // "Update now": the installer takes over
                 continue;
             }
+            // Open but behind another window (e.g. a borderless game): ~30 frames a second is plenty.
+            if (!smoke && GetForegroundWindow() != hwnd)
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, 30, QS_ALLINPUT);
             if (smoke && ++frames > smokeFrames) break;  // enough frames for animations to settle
             if (g_resizeW) {
                 cleanupRenderTarget();
@@ -460,7 +469,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             g_context->ClearRenderTargetView(g_rtv, clear);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
             if (smoke && frames == smokeFrames) saveScreenshot(fs::temp_directory_path() / "tacaudio_gui_smoke.bmp");
-            g_swapChain->Present(1, 0);
+            g_occluded = g_swapChain->Present(1, 0) == DXGI_STATUS_OCCLUDED;
         }
         g_app = nullptr;
     }

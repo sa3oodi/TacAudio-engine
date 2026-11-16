@@ -4,6 +4,16 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.9 - 2026-11-16
+
+### Fixed
+- Lower FPS while gaming with the TacAudio window minimised: the app kept redrawing as fast as it could, using a whole CPU core. Minimised, in the tray or covered by a fullscreen game it now does not draw at all, and behind another window it draws at most 30 times a second.
+- Robotic or choppy sound on some PCs (seen with HyperX and Astro headsets): TacAudio ran its full 3D processing for every app's sound, even for apps it plays clean, silent streams, and while switched off. It now runs it only for your game, which can cut its CPU use several times over. Your game sounds exactly the same.
+
+### Improved
+- The engine log now shows how long TacAudio takes per audio buffer, to track down sound problems.
+- Footstep ring: the setting now says it can cost some FPS in fullscreen games.
+
 ## 0.7.8 - 2026-11-16
 
 ### New

@@ -99,6 +99,7 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
         (s.name == "FL" || s.name == "FR" ? frontCh_ : surroundCh_).push_back(c);
     }
     holdMax_ = static_cast<std::size_t>(kStereoHoldSec * sampleRate / kBlock);
+    idleMax_ = static_cast<std::size_t>(kIdleSec * sampleRate / kBlock);
 
     inBlock_.assign(inCh_, std::vector<float>(kBlock, 0.0f));
     {
@@ -299,21 +300,42 @@ void ApoEngine::renderBlock() noexcept {
     }
     if (decided_) mode_.store(game ? 1 : 0, std::memory_order_relaxed);
 
+    // Long digital silence (a stream that is open but plays nothing): nothing to render.
+    if (std::max(frontPk, surPk) < kSilent) {
+        if (silentBlocks_ <= idleMax_) ++silentBlocks_;
+    } else {
+        silentBlocks_ = 0;
+    }
+    const bool idle = silentBlocks_ > idleMax_;
+
+    const float tgt3d = target3d_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float tgtOn = targetOn_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float tgtProc = game ? 1.0f : 0.0f;
+    // The renderer's sound is used only while (fading to) game sound, with power and 3D on (see
+    // the mix below); otherwise its output is multiplied by zero, so it is not computed at all.
+    const bool render = !idle && (tgtProc > 0.0f || mixProc_ > 0.0f) && (tgtOn > 0.0f || mixOn_ > 0.0f) &&
+                        (tgt3d > 0.0f || mix3d_ > 0.0f);
+    if (render && !renderedLast_) {  // start from a clean state, not from sound of long ago
+        if (cur_) cur_->renderer->reset();
+        if (next_) next_->renderer->reset();
+    }
+    renderedLast_ = render;
+    rendering_.store(render, std::memory_order_relaxed);
+
     // Footstep detection on the game's channels (for the app's direction ring).
-    steps_.process(inPtrs_.data(), kBlock);
-    for (std::size_t c = 0; c < steps_.channels(); ++c)
-        for (int l = 0; l < FootstepTracker::kLevels; ++l) {
-            const float a = steps_.takeMax(c, l);
-            if (!game) continue;  // a stereo app (voice chat, music) is not the game
-            float cur = stepAct_[l][c].load(std::memory_order_relaxed);
-            while (a > cur && !stepAct_[l][c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
+    if (game && !idle) {  // a stereo app (voice chat, music) is not the game
+        steps_.process(inPtrs_.data(), kBlock);
+        for (std::size_t c = 0; c < steps_.channels(); ++c)
+            for (int l = 0; l < FootstepTracker::kLevels; ++l) {
+                const float a = steps_.takeMax(c, l);
+                float cur = stepAct_[l][c].load(std::memory_order_relaxed);
+                while (a > cur && !stepAct_[l][c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
+                }
             }
-        }
-    {
         const FootstepTracker::Stats d = steps_.takeStats();
         const int v[5] = {d.impacts, d.own, d.single, d.balanced, d.strict};
         for (int i = 0; i < 5; ++i)
-            if (v[i] && game) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
+            if (v[i]) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
     }
 
     // Pick up a new pipeline (only once the previous old one has been collected).
@@ -328,8 +350,11 @@ void ApoEngine::renderBlock() noexcept {
         }
     }
 
-    if (cur_) {
+    if (cur_ && render) {
         cur_->renderer->processBlock(inPtrs_.data(), tmpL_.data(), tmpR_.data());
+    } else if (cur_) {
+        std::fill(tmpL_.begin(), tmpL_.end(), 0.0f);
+        std::fill(tmpR_.begin(), tmpR_.end(), 0.0f);
     } else {
         std::fill(tmpL_.begin(), tmpL_.end(), 0.0f);
         std::fill(tmpR_.begin(), tmpR_.end(), 0.0f);
@@ -341,7 +366,12 @@ void ApoEngine::renderBlock() noexcept {
     }
     cleanBlock(cur_, clnL_.data(), clnR_.data());
     if (next_) {
-        next_->renderer->processBlock(inPtrs_.data(), nxtL_.data(), nxtR_.data());
+        if (render) {
+            next_->renderer->processBlock(inPtrs_.data(), nxtL_.data(), nxtR_.data());
+        } else {
+            std::fill(nxtL_.begin(), nxtL_.end(), 0.0f);
+            std::fill(nxtR_.begin(), nxtR_.end(), 0.0f);
+        }
         cleanBlock(next_, cnxL_.data(), cnxR_.data());
         ++swapStep_;
         if (swapStep_ > kWarmBlocks) {
@@ -364,9 +394,6 @@ void ApoEngine::renderBlock() noexcept {
     // 3D on/off blend with the plain downmix, and volume (both smoothed, click-free); then game
     // sound vs clean (stereo apps). Power off = the plain downmix at unity gain (as if TacAudio
     // were not there).
-    const float tgt3d = target3d_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
-    const float tgtOn = targetOn_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
-    const float tgtProc = game ? 1.0f : 0.0f;
     const float tgtGain = targetGain_.load(std::memory_order_relaxed);
     const float step = static_cast<float>(1.0 / (0.01 * rate_));
     const float stepIn = static_cast<float>(1.0 / (0.03 * rate_));    // to game sound: 30 ms

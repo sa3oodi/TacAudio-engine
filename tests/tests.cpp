@@ -1395,6 +1395,7 @@ void testApoGameSoundOnly() {
         const auto in = apoStream(2 * kSec, false, 11);
         const auto out = apoRun(*e, in);
         CHECK(e->mode() == 0);
+        CHECK(!e->rendering());  // clean: the 3D renderer does not run at all
         CHECK(apoCleanError(in, out, 0, in.size() / 8) < 1e-6);
     }
 
@@ -1405,6 +1406,7 @@ void testApoGameSoundOnly() {
         const auto in = apoStream(2 * kSec, true, 12);
         const auto out = apoRun(*e, in);
         CHECK(e->mode() == 1);
+        CHECK(e->rendering());
         CHECK(apoCleanError(in, out, kSec / 2, 2 * kSec) > 0.01);
     }
 
@@ -1454,6 +1456,37 @@ void testApoGameSoundOnly() {
         CHECK(e->mode() == 0);
         CHECK(apoCleanError(in, out, 0, in.size() / 8, &eq) < 1e-5);
         CHECK(apoCleanError(in, out, 0, in.size() / 8) > 0.01);  // and it did change the sound
+    }
+
+    // 7) A game stream that goes digitally silent stops rendering after kIdleSec (output silent),
+    //    and renders again from the first sound.
+    {
+        ApoFixture fx("");
+        auto e = fx.make();
+        apoRun(*e, apoStream(kSec, true, 21));
+        const std::vector<float> quiet(static_cast<std::size_t>(6 * kSec) * 8, 0.0f);
+        const auto outQ = apoRun(*e, quiet);
+        CHECK(!e->rendering());
+        float pk = 0.0f;
+        for (std::size_t i = outQ.size() - kSec * 2; i < outQ.size(); ++i) pk = std::max(pk, std::abs(outQ[i]));
+        CHECK(pk == 0.0f);
+        const auto in = apoStream(kSec, true, 22);
+        const auto out = apoRun(*e, in);
+        CHECK(e->rendering());
+        CHECK(e->mode() == 1);
+        CHECK(apoCleanError(in, out, kSec / 2, kSec) > 0.01);
+        bool finite = true;
+        for (float v : out) finite = finite && std::isfinite(v) && std::abs(v) <= 1.0f;
+        CHECK(finite);
+    }
+
+    // 8) TacAudio off or 3D off: the renderer's sound is not used, so it does not run.
+    for (const char* ini : {"enabled=0\n", "3d=0\n"}) {
+        ApoFixture fx(ini);
+        auto e = fx.make();
+        apoRun(*e, apoStream(kSec, true, 23));
+        CHECK(e->mode() == 1);
+        CHECK(!e->rendering());
     }
 }
 
