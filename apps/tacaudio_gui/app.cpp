@@ -573,6 +573,13 @@ void App::pollDirect() {
     if (preview_ || !direct_) return;
     const auto now = std::chrono::steady_clock::now();
     if (now - lastApoPoll_ < std::chrono::milliseconds(100)) return;
+    // The engine can be replaced while the app runs (the updater opens the new app, then updates
+    // the engine): look again every few seconds while the update notice is up.
+    if (engineOutdated_ && !apoJob_.valid() && now - lastEngineCheck_ > std::chrono::seconds(3)) {
+        lastEngineCheck_ = now;
+        engineOutdated_ = apoctl::engineOutdated();
+        if (!engineOutdated_) lastApoIni_.clear();  // re-send the settings to the new engine
+    }
     lastApoPoll_ = now;
     if (captureId_ < 0) {  // keep the engine's last request (a new id = record now)
         try {

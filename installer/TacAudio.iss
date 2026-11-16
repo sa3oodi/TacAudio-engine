@@ -77,7 +77,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\TacAudio.exe"; Description: "Launch TacAudio"; Flags: nowait postinstall skipifsilent
 ; "Update now" in the app runs this installer with /SILENT /update=1: open the new version afterwards.
-Filename: "{app}\TacAudio.exe"; Flags: nowait; Check: IsAppUpdate
+; postinstall = after [Code] ssPostInstall has replaced the engine (plain [Run] entries run before
+; it, and the app then still saw the old engine and kept its "Update engine" notice).
+Filename: "{app}\TacAudio.exe"; Flags: nowait postinstall; Check: IsAppUpdate
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/IM TacAudio.exe /F"; Flags: runhidden; RunOnceId: "StopTacAudio"

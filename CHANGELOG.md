@@ -4,6 +4,11 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.8 - 2026-11-16
+
+### Fixed
+- After Update now, the "update the engine" notice could stay up even though the engine was already updated, until you closed and reopened TacAudio. The app now reopens only after the engine is updated, and the notice goes away by itself.
+
 ## 0.7.7 - 2026-11-16
 
 ### Fixed

@@ -190,7 +190,7 @@ private:
     std::future<int> apoJob_;
     std::string apoJobLabel_, apoMsg_;
     std::string lastApoIni_;
-    std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{};
+    std::chrono::steady_clock::time_point lastApoPoll_{}, surroundSeen_{}, audioSeen_{}, lastEngineCheck_{};
     std::optional<apoctl::Status> apoStatus_;
     std::string eqError_;
     DirectionField dirField_;
