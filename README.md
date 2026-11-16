@@ -68,7 +68,7 @@ icon and hotkeys.
 
 ## Download and install
 
-1. Download **`TacAudio-Setup-0.7.6.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
+1. Download **`TacAudio-Setup-0.7.7.exe`** from the [Releases](https://github.com/sa3oodi/TacAudio-engine/releases) page.
 2. Run it. It installs for your user only into `%LOCALAPPDATA%\Programs\TacAudio`, with a Start
    menu entry and an uninstaller in *Settings &rarr; Apps*.
 
@@ -94,8 +94,11 @@ TacAudio's **Setup assistant** opens on first launch (and any time from the *Set
 Tested with Call of Duty: Modern Warfare 4 on a GoXLR Mini: full 7.1 arrives, no anti-cheat issues.
 
 **Good to know**
-- The engine processes everything played on that headphone device (Discord, browser...). Stereo
-  apps stay stereo and pass through the same sound settings.
+- Only surround sound (7.1 / 5.1), normally your game, gets TacAudio's processing. Stereo apps on
+  the same headphones (Discord, browser, music) play clean, with just your headphone EQ. A stream
+  switches to TacAudio as soon as it carries surround sound, and back to clean after 10 s without
+  any. *Settings &rarr; Other apps &rarr; Process stereo apps* processes everything (for stereo-only
+  games); voice calls always stay clean.
 - Windows' *Audio enhancements* must be enabled for the device (the default).
 - Apps that use exclusive or "raw" audio mode bypass Windows' audio effects, and therefore TacAudio.
 - *Remove engine* in the Setup assistant (or uninstalling TacAudio) restores the device's original
@@ -118,7 +121,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode), and the headphone EQ (*Find your headphones* opens AutoEq, download the "Equalizer APO" parametric file, *Import file*) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
-| **Settings** | Start with Windows, turn on at launch, close to tray, hotkeys, accessibility (footstep ring: position, size, opacity), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
+| **Settings** | Start with Windows, turn on at launch, other apps (process stereo apps too), close to tray, hotkeys, accessibility (footstep ring: position, size, opacity), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
 
 | Hotkey | Action |
 |---|---|

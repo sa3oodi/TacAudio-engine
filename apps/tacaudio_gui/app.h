@@ -43,6 +43,7 @@ struct AppSettings {
     std::string lastVersion;        // version whose patch notes were last seen ("" = before 0.7.1)
     bool startWithWindows = false;  // mirrored from the registry Run key
     bool autoEngine = true;         // turn the engine on when the app starts
+    bool stereoApps = false;        // Direct mode: also process apps without surround sound (not just the game)
     bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
     bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
     bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)

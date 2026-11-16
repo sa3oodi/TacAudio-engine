@@ -29,6 +29,12 @@
 #include "core/varispeed.h"
 #include "core/wav.h"
 #include "engine/engine.h"
+#include "apo/apo_engine.h"
+#include "cli.h"
+
+#include <chrono>
+#include <memory>
+#include <thread>
 
 #ifdef TAC_HAS_SOFA
 #include "sofa/sofa_import.h"
@@ -1299,6 +1305,158 @@ void testDiffuseFieldEqKemar() { checkDiffuseFieldEq(importSofa(TAC_TEST_SOFA_FI
 
 }  // namespace
 
+// ------------------------------------------------------------------ APO: game sound only
+namespace tac::apo {
+void apoLog(const char*, ...) {}  // the DLL's log sink (tac_apo.cpp); quiet in tests
+}
+
+namespace {
+struct ApoFixture {
+    std::filesystem::path ini;
+    explicit ApoFixture(const std::string& extra) {
+        ini = std::filesystem::temp_directory_path() / "tac_test_apo.ini";
+        std::ofstream(ini) << "enabled=1\nhead=\nroom=neutral\ndynOn=1\ndynPreset=medium\nstepsOn=1\nstepsLevel=6\n"
+                              "volume=-6\n3d=1\n" << extra;
+    }
+    ~ApoFixture() {
+        std::error_code ec;
+        std::filesystem::remove(ini, ec);
+    }
+    std::unique_ptr<apo::ApoEngine> make(bool comms = false) const {
+        auto e = std::make_unique<apo::ApoEngine>(48000.0, 8, 0x63F, cli::exeDir(), ini, comms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // the worker builds the renderer
+        return e;
+    }
+};
+
+// 8-channel interleaved test stream: independent noise on FL / FR, and on SL / SR if surround.
+std::vector<float> apoStream(std::size_t frames, bool surround, std::uint32_t seed) {
+    Rng rng;
+    rng.s = seed;
+    std::vector<float> v(frames * 8, 0.0f);
+    for (std::size_t i = 0; i < frames; ++i) {
+        v[i * 8 + 0] = 0.08f * rng.next();
+        v[i * 8 + 1] = 0.08f * rng.next();
+        if (surround) {
+            v[i * 8 + 6] = 0.05f * rng.next();
+            v[i * 8 + 7] = 0.05f * rng.next();
+        }
+    }
+    return v;
+}
+
+std::vector<float> apoRun(apo::ApoEngine& e, const std::vector<float>& in) {
+    const std::size_t frames = in.size() / 8;
+    std::vector<float> out(frames * 2, 0.0f);
+    for (std::size_t done = 0; done < frames;) {
+        const std::uint32_t n = static_cast<std::uint32_t>(std::min<std::size_t>(480, frames - done));
+        e.process(in.data() + done * 8, out.data() + done * 2, n, 2);
+        done += n;
+    }
+    return out;
+}
+
+// Largest |out - expected| over [from, to) frames, expected = FL/FR (optionally filtered) delayed
+// by the engine's fixed latency (one block + the limiter look-ahead).
+double apoCleanError(const std::vector<float>& in, const std::vector<float>& out, std::size_t from, std::size_t to,
+                     const HeadphoneEq* eq = nullptr) {
+    constexpr std::size_t kDelay = apo::ApoEngine::kBlock + 48;
+    std::vector<float> l(in.size() / 8), r(in.size() / 8);
+    for (std::size_t i = 0; i < l.size(); ++i) {
+        l[i] = in[i * 8];
+        r[i] = in[i * 8 + 1];
+    }
+    if (eq) {
+        auto fl = eq->makeFilters(48000.0), fr = fl;
+        const float g = std::pow(10.0f, eq->preampDb / 20.0f);
+        for (std::size_t i = 0; i < l.size(); ++i) {
+            for (auto& f : fl) l[i] = f.process(l[i]);
+            for (auto& f : fr) r[i] = f.process(r[i]);
+            l[i] *= g;
+            r[i] *= g;
+        }
+    }
+    double err = 0.0;
+    for (std::size_t i = std::max(from, kDelay); i < to && i < l.size(); ++i) {
+        err = std::max(err, static_cast<double>(std::abs(out[i * 2] - l[i - kDelay])));
+        err = std::max(err, static_cast<double>(std::abs(out[i * 2 + 1] - r[i - kDelay])));
+    }
+    return err;
+}
+}  // namespace
+
+void testApoGameSoundOnly() {
+    constexpr std::size_t kSec = 48000;
+
+    // 1) A stereo app (FL/FR only, as Windows hands it over) passes through untouched.
+    {
+        ApoFixture fx("");
+        auto e = fx.make();
+        const auto in = apoStream(2 * kSec, false, 11);
+        const auto out = apoRun(*e, in);
+        CHECK(e->mode() == 0);
+        CHECK(apoCleanError(in, out, 0, in.size() / 8) < 1e-6);
+    }
+
+    // 2) A 7.1 game stream gets TacAudio's sound (not the clean copy), from the first sample.
+    {
+        ApoFixture fx("");
+        auto e = fx.make();
+        const auto in = apoStream(2 * kSec, true, 12);
+        const auto out = apoRun(*e, in);
+        CHECK(e->mode() == 1);
+        CHECK(apoCleanError(in, out, kSec / 2, 2 * kSec) > 0.01);
+    }
+
+    // 3) Surround, then front-only: stays on through the hold time, then goes clean.
+    {
+        ApoFixture fx("");
+        auto e = fx.make();
+        apoRun(*e, apoStream(kSec, true, 13));
+        apoRun(*e, apoStream(8 * kSec, false, 14));
+        CHECK(e->mode() == 1);  // 8 s < hold
+        apoRun(*e, apoStream(3 * kSec, false, 15));
+        CHECK(e->mode() == 0);  // 11 s > hold
+        const auto in = apoStream(2 * kSec, false, 16);
+        const auto out = apoRun(*e, in);
+        CHECK(apoCleanError(in, out, 0, 2 * kSec) < 1e-6);
+        apoRun(*e, apoStream(kSec / 10, true, 17));  // surround again: on at once
+        CHECK(e->mode() == 1);
+    }
+
+    // 4) "Also process stereo apps": the stereo stream gets TacAudio's sound.
+    {
+        ApoFixture fx("stereoApps=1\n");
+        auto e = fx.make();
+        const auto in = apoStream(2 * kSec, false, 18);
+        const auto out = apoRun(*e, in);
+        CHECK(e->mode() == 1);
+        CHECK(apoCleanError(in, out, kSec / 2, 2 * kSec) > 0.01);
+    }
+
+    // 5) A voice-call stream stays clean even with surround content.
+    {
+        ApoFixture fx("stereoApps=1\n");
+        auto e = fx.make(true);
+        const auto in = apoStream(kSec, true, 19);
+        apoRun(*e, in);
+        CHECK(e->mode() == 0);
+    }
+
+    // 6) The headphone EQ still applies to the clean sound.
+    {
+        const std::string eqText = "-4|PK:1000:6:1|HSC:8000:-3:0.7";
+        ApoFixture fx("eq=" + eqText + "\n");
+        auto e = fx.make();
+        const auto in = apoStream(2 * kSec, false, 20);
+        const auto out = apoRun(*e, in);
+        const HeadphoneEq eq = HeadphoneEq::fromCompact(eqText);
+        CHECK(e->mode() == 0);
+        CHECK(apoCleanError(in, out, 0, in.size() / 8, &eq) < 1e-5);
+        CHECK(apoCleanError(in, out, 0, in.size() / 8) > 0.01);  // and it did change the sound
+    }
+}
+
 int main() {
     const std::pair<const char*, std::function<void()>> tests[] = {
         {"fft matches DFT", testFftMatchesDft},
@@ -1330,6 +1488,7 @@ int main() {
         {"headphone EQ: parse, round trip, response, renderer", testHeadphoneEq},
         {"patch notes: changelog and release text", testPatchNotes},
         {"engine live controls: swap, volume, 3D bypass", testEngineLiveControls},
+        {"APO: game sound only, stereo apps clean", testApoGameSoundOnly},
 #ifdef TAC_TEST_SOFA_FILE
         {"SOFA import: MIT KEMAR conventions", testSofaKemar},
         {"diffuse-field EQ (MIT KEMAR): flat average, cues kept", testDiffuseFieldEqKemar},

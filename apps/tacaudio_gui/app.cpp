@@ -109,6 +109,7 @@ AppSettings loadSettings() {
             else if (k == "eqName") s.eqName = v;
             else if (k == "lastVersion") s.lastVersion = v;
             else if (k == "autoEngine") s.autoEngine = v == "1";
+            else if (k == "stereoApps") s.stereoApps = v == "1";
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
             else if (k == "setupDone") s.setupDone = v == "1";
@@ -166,6 +167,7 @@ void saveSettings(const AppSettings& s) {
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
       << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
+      << "\nstereoApps=" << (s.stereoApps ? 1 : 0)
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
@@ -530,7 +532,8 @@ void App::pollBackground() {
                          SoundSettings::needsRebuild(cfg_.effective(), saved_.effective()) ||
                          cfg_.sound.volumeDb != saved_.sound.volumeDb || cfg_.sound.enabled3d != saved_.sound.enabled3d ||
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
-                         cfg_.autoEngine != saved_.autoEngine || cfg_.closeToTray != saved_.closeToTray ||
+                         cfg_.autoEngine != saved_.autoEngine || cfg_.stereoApps != saved_.stereoApps ||
+                         cfg_.closeToTray != saved_.closeToTray ||
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
                          cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
                          cfg_.eqName != saved_.eqName || cfg_.overlayOn != saved_.overlayOn ||
@@ -548,10 +551,11 @@ std::string App::apoIniText() const {
     char b[512];
     std::snprintf(b, sizeof(b),
                   "enabled=%d\nhead=%s\nroom=%s\npunch=%g\nvolume=%g\n3d=%d\ndynOn=%d\ndynPreset=%s\nstepsOn=%d\n"
-                  "stepsLevel=%g\nstepsSmart=%d\nbass=%g\n",
+                  "stepsLevel=%g\nstepsSmart=%d\nbass=%g\nstereoApps=%d\n",
                   wantRunning_ && !headTestBusy() ? 1 : 0, cfg_.sound.head.c_str(), cfg_.sound.room.c_str(), cfg_.sound.punch,
                   cfg_.sound.volumeDb, cfg_.sound.enabled3d ? 1 : 0, cfg_.dynOn ? 1 : 0, cfg_.dynPreset.c_str(),
-                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb);
+                  cfg_.stepsOn ? 1 : 0, cfg_.stepsLevel, cfg_.stepsSmart ? 1 : 0, cfg_.sound.bassDb,
+                  cfg_.stereoApps ? 1 : 0);
     return std::string(b) + "eq=" + cfg_.effective().eq + "\ncapture=" + std::to_string(std::max(0, captureId_)) + "\n";
 }
 
@@ -1214,6 +1218,15 @@ void App::pageSettings() {
                   def.startWithWindows))
         setAutostart(cfg_.startWithWindows);
     toggleRow("Turn on at launch", &cfg_.autoEngine, "Starts the 3D engine as soon as TacAudio opens.", def.autoEngine);
+    endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    beginCard("##otherapps", "Other apps", nullptr, 0,
+              "Only surround sound (7.1 / 5.1) - normally your game - gets TacAudio. Discord, browsers and music play "
+              "clean, with just your headphone EQ.");
+    toggleRow("Process stereo apps", &cfg_.stereoApps,
+              "Give stereo apps TacAudio's effects too (for games that only play in stereo).",
+              def.stereoApps);
     endCard();
     ImGui::Dummy(ImVec2(0, S(6)));
 

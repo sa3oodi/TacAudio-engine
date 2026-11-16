@@ -9,8 +9,13 @@
 //     another slot and are deleted here.
 //
 // Settings: %ProgramData%\TacAudio\apo.ini, same keys as the app's settings.ini (head, room,
-// punch, volume, 3d, dynOn, dynPreset, stepsOn, stepsLevel, bass) plus "enabled". Re-read when it
-// changes.
+// punch, volume, 3d, dynOn, dynPreset, stepsOn, stepsLevel, bass) plus "enabled" and "stereoApps".
+// Re-read when it changes.
+//
+// Game sound only: Windows runs one instance per app stream and hands every stream over as 7.1,
+// stereo apps with only the front left / right channels filled. A stream gets TacAudio's sound
+// only while it carries surround content (side, back, centre or LFE); stereo apps (voice chat,
+// browser, music) pass through clean with just the headphone EQ, unless "stereoApps" is set.
 
 #include <atomic>
 #include <cstdint>
@@ -41,6 +46,7 @@ struct ApoSettings {
     bool enabled3d = true;
     bool enabled = true;              // TacAudio power: off = plain stereo downmix at unity gain
     int captureId = 0;                // the app asks for a recording of the game sound by changing this
+    bool stereoApps = false;          // also process streams without surround content
 
     bool needsRebuild(const ApoSettings& o) const {
         return head != o.head || room != o.room || dynamics != o.dynamics || punch != o.punch ||
@@ -54,8 +60,9 @@ ApoSettings readSettings(const std::filesystem::path& file);
 class ApoEngine {
 public:
     // dataDir: folder with hrtf/ (MIT KEMAR) and hrtf/sadie2/. inChannels/inMask: APO input.
+    // communications: a voice-call stream (always passed through clean).
     ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t inMask, std::filesystem::path dataDir,
-              std::filesystem::path settingsFile);
+              std::filesystem::path settingsFile, bool communications = false);
     ~ApoEngine();
     ApoEngine(const ApoEngine&) = delete;
     ApoEngine& operator=(const ApoEngine&) = delete;
@@ -71,10 +78,23 @@ public:
     void takeStepStats(int* out5) noexcept;               // impacts, own, single, balanced, strict
 
     static constexpr std::size_t kBlock = 128;  // 2.7 ms at 48 kHz (same as the app)
+    static constexpr double kStereoHoldSec = 10.0;  // surround-free time before a stream goes clean
+    static constexpr float kAudible = 1e-4f;        // -80 dBFS: a channel "carries sound"
+
+    // 1 = this stream gets TacAudio's sound, 0 = passed through clean, -1 = nothing heard yet.
+    int mode() const noexcept { return mode_.load(std::memory_order_relaxed); }
 
 private:
     void worker();
     void renderBlock() noexcept;  // inBlock_ -> one block of stereo into the output queue
+
+    // One renderer plus the headphone EQ alone (the clean sound for stereo apps), swapped together.
+    struct Pipeline {
+        std::unique_ptr<BinauralRenderer> renderer;
+        std::vector<Biquad> eqL, eqR;
+        float eqGain = 1.0f;
+    };
+    void cleanBlock(Pipeline* p, float* l, float* r) noexcept;  // downmix (+ EQ) of inBlock_
 
     const double rate_;
     const std::uint32_t inCh_;
@@ -89,11 +109,18 @@ private:
     std::vector<float> qL_, qR_;               // output queue (ring), size 2 * kBlock
     std::size_t qRead_ = 0, qWrite_ = 0, qCount_ = 0;
     std::vector<float> tmpL_, tmpR_, nxtL_, nxtR_;
-    BinauralRenderer* cur_ = nullptr;           // owned; renderer in use
-    BinauralRenderer* next_ = nullptr;          // owned; warming up / fading in
+    std::vector<float> clnL_, clnR_, cnxL_, cnxR_;  // clean sound of cur_ / next_
+    Pipeline* cur_ = nullptr;                   // owned; in use
+    Pipeline* next_ = nullptr;                  // owned; warming up / fading in
     int swapStep_ = 0;
     float gain_ = 0.0f, mix3d_ = 1.0f;          // smoothed volume (linear) and 3D amount
     float mixOn_ = 1.0f;                        // smoothed power (1 = TacAudio, 0 = plain downmix)
+    float mixProc_ = 0.0f;                      // smoothed game-sound amount (1 = TacAudio, 0 = clean)
+    std::vector<std::size_t> frontCh_, surroundCh_;  // FL/FR vs every other input channel
+    bool decided_ = false;                      // the first audible block sets mixProc_ directly
+    bool surround_ = false;                     // surround content seen within the hold time
+    std::size_t holdBlocks_ = 0, holdMax_ = 0;
+    const bool comms_;
     int statBlocks_ = 0;
     Limiter limiter_;
     FootstepTracker steps_;
@@ -101,8 +128,10 @@ private:
     std::atomic<int> stepStat_[5] = {};
 
     // Hand-over slots between threads.
-    std::atomic<BinauralRenderer*> pending_{nullptr};  // worker -> audio
-    std::atomic<BinauralRenderer*> retired_{nullptr};  // audio -> worker (to delete)
+    std::atomic<Pipeline*> pending_{nullptr};  // worker -> audio
+    std::atomic<Pipeline*> retired_{nullptr};  // audio -> worker (to delete)
+    std::atomic<bool> stereoApps_{false};
+    std::atomic<int> mode_{-1};
     std::atomic<float> targetGain_{0.5f};
     std::atomic<bool> target3d_{true};
     std::atomic<bool> targetOn_{true};

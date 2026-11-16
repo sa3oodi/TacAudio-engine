@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(TacAudio VERSION 0.7.6 LANGUAGES CXX)
+project(TacAudio VERSION 0.7.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -176,8 +176,9 @@ endif()
 # ---------------------------------------------------------------- tests
 if(TAC_BUILD_TESTS)
     enable_testing()
-    add_executable(tac_tests tests/tests.cpp)
-    target_link_libraries(tac_tests PRIVATE tac_core)
+    add_executable(tac_tests tests/tests.cpp apps/apo/apo_engine.cpp)
+    target_include_directories(tac_tests PRIVATE apps)
+    target_link_libraries(tac_tests PRIVATE tac_core tac_cli)
     target_compile_definitions(tac_tests PRIVATE TAC_CHANGELOG_FILE="${CMAKE_CURRENT_SOURCE_DIR}/CHANGELOG.md")
     if(TAC_WITH_SOFA)
         target_link_libraries(tac_tests PRIVATE tac_sofa)

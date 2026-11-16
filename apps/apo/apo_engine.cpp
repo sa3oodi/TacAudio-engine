@@ -64,6 +64,7 @@ ApoSettings readSettings(const std::filesystem::path& file) {
             else if (k == "eq") s.eq = v;
             else if (k == "enabled") s.enabled = v == "1";
             else if (k == "capture") s.captureId = std::stoi(v);
+            else if (k == "stereoApps") s.stereoApps = v == "1";
         } catch (const std::exception&) {
             // malformed value: keep the default
         }
@@ -74,12 +75,13 @@ ApoSettings readSettings(const std::filesystem::path& file) {
 }
 
 ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t inMask, std::filesystem::path dataDir,
-                     std::filesystem::path settingsFile)
+                     std::filesystem::path settingsFile, bool communications)
     : rate_(sampleRate),
       inCh_(inChannels),
       dataDir_(std::move(dataDir)),
       settingsFile_(std::move(settingsFile)),
-      limiter_(sampleRate) {
+      limiter_(sampleRate),
+      comms_(communications) {
     std::call_once(g_dirOnce, [this] { cli::setExeDirOverride(dataDir_); });
     const std::uint32_t mask = inMask ? inMask : defaultChannelMask(inChannels);
     layout_ = layoutFromChannelMask(mask);
@@ -94,7 +96,9 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
         else if (s.name == "FR") downR_[c] = 1.0f;
         else if (std::abs(s.azimuthDeg) < 1.0f || std::abs(std::abs(s.azimuthDeg) - 180.0f) < 1.0f) downL_[c] = downR_[c] = 0.7071f;
         else (s.azimuthDeg < 0 ? downL_[c] : downR_[c]) = 0.7071f;
+        (s.name == "FL" || s.name == "FR" ? frontCh_ : surroundCh_).push_back(c);
     }
+    holdMax_ = static_cast<std::size_t>(kStereoHoldSec * sampleRate / kBlock);
 
     inBlock_.assign(inCh_, std::vector<float>(kBlock, 0.0f));
     {
@@ -116,6 +120,7 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     tmpR_.assign(kBlock, 0.0f);
     nxtL_.assign(kBlock, 0.0f);
     nxtR_.assign(kBlock, 0.0f);
+    for (auto* v : {&clnL_, &clnR_, &cnxL_, &cnxR_}) v->assign(kBlock, 0.0f);
 
     const ApoSettings s = readSettings(settingsFile_);
     gain_ = dbToLin(s.volumeDb);
@@ -125,6 +130,8 @@ ApoEngine::ApoEngine(double sampleRate, std::uint32_t inChannels, std::uint32_t 
     targetOn_ = s.enabled;
     mixOn_ = s.enabled ? 1.0f : 0.0f;
     capId_ = s.captureId;  // only a new request records (not the one from before this stream opened)
+    stereoApps_ = s.stereoApps;
+    if (comms_) apoLog("stream: voice call (communications) - passed through clean");
     thread_ = std::thread([this] { worker(); });
 }
 
@@ -143,9 +150,15 @@ void ApoEngine::worker() {
     bool built = false;
     std::filesystem::file_time_type seen{};
     auto lastCheck = steady_clock::now() - seconds(1);
+    int loggedMode = -1;
     while (!stop_) {
         delete retired_.exchange(nullptr);
         std::this_thread::sleep_for(milliseconds(50));
+        if (const int m = mode(); m >= 0 && m != loggedMode) {
+            loggedMode = m;
+            apoLog(m ? "stream: surround sound - TacAudio on"
+                     : "stream: stereo only - passed through clean (headphone EQ only)");
+        }
         if (capDone_.load(std::memory_order_acquire)) writeCapture();
         if (steady_clock::now() - lastCheck < milliseconds(100)) continue;
         lastCheck = steady_clock::now();
@@ -158,6 +171,7 @@ void ApoEngine::worker() {
         targetGain_ = dbToLin(s.volumeDb);
         target3d_ = s.enabled3d;
         targetOn_ = s.enabled;
+        stereoApps_ = s.stereoApps;
         if (s.captureId != capId_ && !capArmed_.load()) {
             capId_ = s.captureId;
             try {
@@ -190,8 +204,14 @@ void ApoEngine::worker() {
             a.opts["--lfe-db"] = std::to_string(s.bassDb);
             a.opts["--gain-db"] = "0";
             const BinauralConfig cfg = cli::binauralFrom(a, 0.0f, kBlock, s.room, s.dynamics);
-            auto* r = new BinauralRenderer(layout_, *head, rate_, cfg);
-            delete pending_.exchange(r);  // an older renderer the audio thread never picked up
+            auto* p = new Pipeline;
+            p->renderer = std::make_unique<BinauralRenderer>(layout_, *head, rate_, cfg);
+            if (!cfg.eq.empty()) {
+                p->eqL = cfg.eq.makeFilters(rate_);
+                p->eqR = p->eqL;
+                p->eqGain = dbToLin(cfg.eq.preampDb);
+            }
+            delete pending_.exchange(p);  // an older one the audio thread never picked up
             apoLog("engine: head %s, room %s, dynamics %s, punch %.0f, footsteps %+.1f dB, bass %+.1f dB, volume %.1f dB, "
                    "3D %s (%s, ready in %lld ms)",
                    s.head.c_str(), s.room.c_str(), s.dynamics.c_str(), s.punch, s.footstepsDb, s.bassDb, s.volumeDb,
@@ -239,12 +259,52 @@ void ApoEngine::takeStepStats(int* out5) noexcept {
     for (int i = 0; i < 5; ++i) out5[i] = stepStat_[i].exchange(0);
 }
 
+void ApoEngine::cleanBlock(Pipeline* p, float* l, float* r) noexcept {
+    // Stereo apps arrive as FL/FR only, so this is their left / right unchanged (+ headphone EQ).
+    for (std::size_t i = 0; i < kBlock; ++i) {
+        float dl = 0.0f, dr = 0.0f;
+        for (std::uint32_t c = 0; c < inCh_; ++c) {
+            dl += downL_[c] * inBlock_[c][i];
+            dr += downR_[c] * inBlock_[c][i];
+        }
+        if (p) {
+            for (auto& f : p->eqL) dl = f.process(dl);
+            for (auto& f : p->eqR) dr = f.process(dr);
+            dl *= p->eqGain;
+            dr *= p->eqGain;
+        }
+        l[i] = dl;
+        r[i] = dr;
+    }
+}
+
 void ApoEngine::renderBlock() noexcept {
+    // Game sound or a stereo app? Surround content (anything but FL/FR) switches TacAudio on at
+    // once; it goes clean only after kStereoHoldSec of sound with nothing outside FL/FR.
+    float frontPk = 0.0f, surPk = 0.0f;
+    for (std::size_t c : frontCh_)
+        for (float v : inBlock_[c]) frontPk = std::max(frontPk, std::fabs(v));
+    for (std::size_t c : surroundCh_)
+        for (float v : inBlock_[c]) surPk = std::max(surPk, std::fabs(v));
+    if (surPk > kAudible) {
+        surround_ = true;
+        holdBlocks_ = holdMax_;
+    } else if (frontPk > kAudible && holdBlocks_ > 0 && --holdBlocks_ == 0) {
+        surround_ = false;
+    }
+    const bool game = !comms_ && (surround_ || stereoApps_.load(std::memory_order_relaxed));
+    if (!decided_ && (surPk > kAudible || frontPk > kAudible)) {
+        decided_ = true;
+        mixProc_ = game ? 1.0f : 0.0f;  // nothing played yet: no fade needed
+    }
+    if (decided_) mode_.store(game ? 1 : 0, std::memory_order_relaxed);
+
     // Footstep detection on the game's channels (for the app's direction ring).
     steps_.process(inPtrs_.data(), kBlock);
     for (std::size_t c = 0; c < steps_.channels(); ++c)
         for (int l = 0; l < FootstepTracker::kLevels; ++l) {
             const float a = steps_.takeMax(c, l);
+            if (!game) continue;  // a stereo app (voice chat, music) is not the game
             float cur = stepAct_[l][c].load(std::memory_order_relaxed);
             while (a > cur && !stepAct_[l][c].compare_exchange_weak(cur, a, std::memory_order_relaxed)) {
             }
@@ -253,12 +313,12 @@ void ApoEngine::renderBlock() noexcept {
         const FootstepTracker::Stats d = steps_.takeStats();
         const int v[5] = {d.impacts, d.own, d.single, d.balanced, d.strict};
         for (int i = 0; i < 5; ++i)
-            if (v[i]) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
+            if (v[i] && game) stepStat_[i].fetch_add(v[i], std::memory_order_relaxed);
     }
 
-    // Pick up a new renderer (only once the previous old one has been collected).
+    // Pick up a new pipeline (only once the previous old one has been collected).
     if (!next_ && !retired_.load(std::memory_order_acquire)) {
-        if (BinauralRenderer* p = pending_.exchange(nullptr, std::memory_order_acq_rel)) {
+        if (Pipeline* p = pending_.exchange(nullptr, std::memory_order_acq_rel)) {
             if (!cur_) {
                 cur_ = p;
             } else {
@@ -269,7 +329,7 @@ void ApoEngine::renderBlock() noexcept {
     }
 
     if (cur_) {
-        cur_->processBlock(inPtrs_.data(), tmpL_.data(), tmpR_.data());
+        cur_->renderer->processBlock(inPtrs_.data(), tmpL_.data(), tmpR_.data());
     } else {
         std::fill(tmpL_.begin(), tmpL_.end(), 0.0f);
         std::fill(tmpR_.begin(), tmpR_.end(), 0.0f);
@@ -279,8 +339,10 @@ void ApoEngine::renderBlock() noexcept {
                 tmpR_[i] += downR_[c] * inBlock_[c][i];
             }
     }
+    cleanBlock(cur_, clnL_.data(), clnR_.data());
     if (next_) {
-        next_->processBlock(inPtrs_.data(), nxtL_.data(), nxtR_.data());
+        next_->renderer->processBlock(inPtrs_.data(), nxtL_.data(), nxtR_.data());
+        cleanBlock(next_, cnxL_.data(), cnxR_.data());
         ++swapStep_;
         if (swapStep_ > kWarmBlocks) {
             const int f = swapStep_ - kWarmBlocks;  // 1..kFadeBlocks
@@ -288,6 +350,8 @@ void ApoEngine::renderBlock() noexcept {
                 const float t = (static_cast<float>(f - 1) + static_cast<float>(i + 1) / kBlock) / kFadeBlocks;
                 tmpL_[i] += t * (nxtL_[i] - tmpL_[i]);
                 tmpR_[i] += t * (nxtR_[i] - tmpR_[i]);
+                clnL_[i] += t * (cnxL_[i] - clnL_[i]);
+                clnR_[i] += t * (cnxR_[i] - clnR_[i]);
             }
             if (f >= kFadeBlocks) {
                 retired_.store(cur_, std::memory_order_release);
@@ -297,12 +361,16 @@ void ApoEngine::renderBlock() noexcept {
         }
     }
 
-    // 3D on/off blend with the plain downmix, and volume (both smoothed, click-free).
-    // Power off = the plain downmix at unity gain (as if TacAudio were not there).
+    // 3D on/off blend with the plain downmix, and volume (both smoothed, click-free); then game
+    // sound vs clean (stereo apps). Power off = the plain downmix at unity gain (as if TacAudio
+    // were not there).
     const float tgt3d = target3d_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
     const float tgtOn = targetOn_.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+    const float tgtProc = game ? 1.0f : 0.0f;
     const float tgtGain = targetGain_.load(std::memory_order_relaxed);
     const float step = static_cast<float>(1.0 / (0.01 * rate_));
+    const float stepIn = static_cast<float>(1.0 / (0.03 * rate_));    // to game sound: 30 ms
+    const float stepOut = static_cast<float>(1.0 / (0.30 * rate_));   // to clean: 300 ms
     const float coef = static_cast<float>(1.0 - std::exp(-1.0 / (0.01 * rate_)));
     auto ramp = [step](float& v, float target) {
         if (v != target) v = target > v ? std::min(target, v + step) : std::max(target, v - step);
@@ -310,21 +378,31 @@ void ApoEngine::renderBlock() noexcept {
     for (std::size_t i = 0; i < kBlock; ++i) {
         ramp(mix3d_, tgt3d);
         ramp(mixOn_, tgtOn);
+        if (mixProc_ != tgtProc)
+            mixProc_ = tgtProc > mixProc_ ? std::min(tgtProc, mixProc_ + stepIn) : std::max(tgtProc, mixProc_ - stepOut);
         gain_ += (tgtGain - gain_) * coef;
         float l = tmpL_[i], r = tmpR_[i];
-        if ((mix3d_ < 1.0f || mixOn_ < 1.0f) && cur_) {
-            float dl = 0.0f, dr = 0.0f;
+        float dl = 0.0f, dr = 0.0f;
+        if (mix3d_ < 1.0f || mixOn_ < 1.0f) {
             for (std::uint32_t c = 0; c < inCh_; ++c) {
                 dl += downL_[c] * inBlock_[c][i];
                 dr += downR_[c] * inBlock_[c][i];
             }
+        }
+        if (mix3d_ < 1.0f && cur_) {
             l = (mix3d_ * l + (1.0f - mix3d_) * dl) * gain_;
             r = (mix3d_ * r + (1.0f - mix3d_) * dr) * gain_;
-            l = mixOn_ * l + (1.0f - mixOn_) * dl;
-            r = mixOn_ * r + (1.0f - mixOn_) * dr;
         } else {
             l *= gain_;
             r *= gain_;
+        }
+        if (mixProc_ < 1.0f) {
+            l = mixProc_ * l + (1.0f - mixProc_) * clnL_[i];
+            r = mixProc_ * r + (1.0f - mixProc_) * clnR_[i];
+        }
+        if (mixOn_ < 1.0f) {
+            l = mixOn_ * l + (1.0f - mixOn_) * dl;
+            r = mixOn_ * r + (1.0f - mixOn_) * dr;
         }
         tmpL_[i] = l;
         tmpR_[i] = r;
@@ -347,7 +425,7 @@ void ApoEngine::renderBlock() noexcept {
     if (cur_ && ++statBlocks_ >= 8) {
         statBlocks_ = 0;
         float mn = 0.0f, mx = 0.0f;
-        cur_->takeDynamicsStats(mn, mx);
+        cur_->renderer->takeDynamicsStats(mn, mx);
         float c = dynMin_.load(std::memory_order_relaxed);
         while (mn < c && !dynMin_.compare_exchange_weak(c, mn, std::memory_order_relaxed)) {
         }

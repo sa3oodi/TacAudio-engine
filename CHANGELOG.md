@@ -4,6 +4,15 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.7 - 2026-11-16
+
+### Fixed
+- Discord, browsers, music and other apps on your headphones could sound robotic or hollow. TacAudio now only processes surround sound (7.1 / 5.1), which is normally your game. Other apps play clean, with just your headphone EQ. Your game sounds exactly the same as before.
+
+### New
+- Settings > Other apps > Process stereo apps: turn it on if your game only plays in stereo and you still want TacAudio on it.
+- Direct mode: after updating, click Update engine when the app asks (Update now does it for you).
+
 ## 0.7.6 - 2026-11-14
 
 ### New

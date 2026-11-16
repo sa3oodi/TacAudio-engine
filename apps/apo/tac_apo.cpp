@@ -377,10 +377,14 @@ public:
     STDMETHODIMP Initialize(UINT32 cb, BYTE* data) override {
         wantCh_ = std::clamp<DWORD>(configDword(L"InputChannels", 8), 1, kMaxCh);
         bool discovery = false;
-        if (data && cb >= sizeof(APOInitSystemEffects2))
-            discovery = reinterpret_cast<APOInitSystemEffects2*>(data)->InitializeForDiscoveryOnly != FALSE;
-        logLine("Initialize: %u bytes of init data%s, asking for %lu input channels", cb,
-                discovery ? " (discovery only)" : "", wantCh_);
+        comms_ = false;
+        if (data && cb >= sizeof(APOInitSystemEffects2)) {
+            const auto* init = reinterpret_cast<APOInitSystemEffects2*>(data);
+            discovery = init->InitializeForDiscoveryOnly != FALSE;
+            comms_ = init->AudioProcessingMode == AUDIO_SIGNALPROCESSINGMODE_COMMUNICATIONS;
+        }
+        logLine("Initialize: %u bytes of init data%s%s, asking for %lu input channels", cb,
+                discovery ? " (discovery only)" : "", comms_ ? " (voice call)" : "", wantCh_);
         return S_OK;
     }
     // Input side: ask for float32 with wantCh_ channels at the output's rate.
@@ -449,7 +453,8 @@ public:
         inMask_ = fi.dwChannelMask;
         silence_.assign(static_cast<size_t>(in[0]->u32MaxFrameCount) * inCh_, 0.0f);
         try {
-            engine_ = std::make_unique<tac::apo::ApoEngine>(fi.fFramesPerSecond, inCh_, inMask_, moduleDir(), settingsPath());
+            engine_ = std::make_unique<tac::apo::ApoEngine>(fi.fFramesPerSecond, inCh_, inMask_, moduleDir(), settingsPath(),
+                                                            comms_);
         } catch (const std::exception& e) {
             logLine("engine start failed: %s - using plain downmix", e.what());
             engine_.reset();
@@ -578,6 +583,7 @@ private:
     IUnknown* outer_;
     std::atomic<long> refs_{1};
     DWORD wantCh_ = 8;
+    bool comms_ = false;  // voice-call stream (communications processing mode)
     UINT32 inCh_ = 0, outCh_ = 0;
     DWORD inMask_ = 0;
     bool locked_ = false;
