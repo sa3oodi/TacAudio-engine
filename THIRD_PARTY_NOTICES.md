@@ -45,6 +45,22 @@ the software without restriction, subject to including the copyright notice and 
 notice in all copies or substantial portions of the software. THE SOFTWARE IS PROVIDED "AS IS",
 WITHOUT WARRANTY OF ANY KIND. https://github.com/ocornut/imgui
 
+## cpp-httplib (compiled in: phone remote web server)
+
+Copyright (c) 2017 yhirose. MIT licence: permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated documentation files, to deal in the
+software without restriction, subject to including the copyright notice and permission notice in
+all copies or substantial portions of the software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND. https://github.com/yhirose/cpp-httplib
+
+## QR Code generator library (compiled in: phone remote QR code)
+
+Copyright (c) Project Nayuki. MIT licence: permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated documentation files, to deal in the
+software without restriction, subject to including the copyright notice and permission notice in
+all copies or substantial portions of the software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND. https://www.nayuki.io/page/qr-code-generator-library
+
 ## Fonts
 
 Segoe UI and Segoe Fluent Icons / Segoe MDL2 Assets are Windows system fonts. TacAudio loads

@@ -60,6 +60,7 @@ icon and hotkeys.
 | 🎮 **Game profiles** | Game library (Steam + Epic found automatically, others added by hand) with each game's own sound; switches when the game comes to the front |
 | 🎚️ **Headphone EQ** | Import a parametric correction for your headphone model (Equalizer APO / AutoEq format, file or paste); applied after 3D, in both modes |
 | ♿ **Footstep ring** | Accessibility option (off by default): a small click-through ring in any corner of the main screen (or the centre) glows towards enemy footsteps. Your own sounds (straight ahead), explosions and loud gunfire are ignored; a Detection setting picks how sure it must be: *Sensitive* (every step-like sound), *Balanced* (from the 2nd step, ignores single shots and automatic fire) or *Strict* (steady walking only, also ignores reloads). Check your game's / tournament's rules before using it competitively |
+| 📱 **Phone remote** | Control TacAudio from your phone's browser while you play (power, 3D, profile, footsteps, dynamics, room, volume, bass, live levels): turn it on in Settings, scan the QR code. Home network only, private pairing code, off by default |
 | 🔁 **A/B switch** | 3D on/off instantly (Ctrl + Alt + F9) to compare against plain stereo |
 | 🧭 **Setup assistant** | Installs the engine on your headphones and shows live whether your game is sending 7.1 |
 | 📊 **Performance page** | Live level of each of the game's 8 speakers, how much loud sound is tamed and quiet sound lifted |
@@ -121,7 +122,7 @@ It detects the cable and its 7.1 setting, opens the right Windows dialogs and ru
 | **Devices** | Where the engine is installed (Direct mode), or source / output devices (VB-CABLE mode), and the headphone EQ (*Find your headphones* opens AutoEq, download the "Equalizer APO" parametric file, *Import file*) |
 | **Setup** | Setup assistant: Direct mode (recommended) or VB-CABLE |
 | **Performance** | The game's 8 speaker levels, streams, how much loud sound is tamed / quiet sound lifted |
-| **Settings** | Start with Windows, turn on at launch, other apps (process stereo apps too), close to tray, hotkeys, accessibility (footstep ring: position, size, opacity), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
+| **Settings** | Start with Windows, turn on at launch, other apps (process stereo apps too), phone remote (QR code), close to tray, hotkeys, accessibility (footstep ring: position, size, opacity), update check (asks GitHub for a newer release at launch and twice a day; a banner links to the download, nothing installs by itself) |
 
 | Hotkey | Action |
 |---|---|
@@ -298,6 +299,11 @@ own is the **update check**: a plain request to the GitHub API for the latest re
 can be turned off in *Settings* (*Check for updates*). Buttons such as *Download VB-CABLE* or
 *Find your headphones* only open a web page in your browser when you click them. Recordings made
 with *Record 15 s of game sound* stay on your PC.
+
+The optional **phone remote** (off by default) opens a port on this PC while it is on. It only
+answers devices on your private home network that send the pairing code from the QR code, and it
+never connects to the internet. The connection is plain HTTP on your network, so it carries only
+TacAudio's settings.
 
 ## Disclaimer
 

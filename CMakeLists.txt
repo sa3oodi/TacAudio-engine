@@ -132,6 +132,18 @@ if(WIN32)
             GIT_SHALLOW TRUE
             SOURCE_SUBDIR _tacaudio_no_cmake)
         FetchContent_MakeAvailable(imgui)
+        # Phone remote: cpp-httplib (web server, one header) and Nayuki's QR Code generator, both MIT.
+        FetchContent_Declare(httplib
+            GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+            GIT_TAG v0.18.1
+            GIT_SHALLOW TRUE
+            SOURCE_SUBDIR _tacaudio_no_cmake)
+        FetchContent_Declare(qrcodegen
+            GIT_REPOSITORY https://github.com/nayuki/QR-Code-generator.git
+            GIT_TAG v1.8.0
+            GIT_SHALLOW TRUE
+            SOURCE_SUBDIR _tacaudio_no_cmake)
+        FetchContent_MakeAvailable(httplib qrcodegen)
         add_library(tac_imgui STATIC
             ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp ${imgui_SOURCE_DIR}/imgui_tables.cpp
             ${imgui_SOURCE_DIR}/imgui_widgets.cpp
@@ -150,9 +162,12 @@ if(WIN32)
         add_executable(tacaudio_gui WIN32
             apps/tacaudio_gui/main.cpp apps/tacaudio_gui/app.cpp apps/tacaudio_gui/ui_widgets.cpp
             apps/tacaudio_gui/profiles.cpp apps/tacaudio_gui/game_library.cpp apps/tacaudio_gui/update_check.cpp
-            apps/tacaudio_gui/head_test.cpp apps/tacaudio_gui/overlay.cpp
+            apps/tacaudio_gui/head_test.cpp apps/tacaudio_gui/overlay.cpp apps/tacaudio_gui/remote.cpp
+            ${qrcodegen_SOURCE_DIR}/cpp/qrcodegen.cpp
             ${CMAKE_CURRENT_BINARY_DIR}/tacaudio.rc)
-        target_link_libraries(tacaudio_gui PRIVATE tac_session tac_imgui shell32 comdlg32 windowscodecs winhttp bcrypt)
+        target_link_libraries(tacaudio_gui PRIVATE tac_session tac_imgui shell32 comdlg32 windowscodecs winhttp bcrypt
+                              ws2_32 iphlpapi)
+        target_include_directories(tacaudio_gui PRIVATE ${httplib_SOURCE_DIR} ${qrcodegen_SOURCE_DIR}/cpp)
         target_compile_definitions(tacaudio_gui PRIVATE TAC_VERSION="${PROJECT_VERSION}")
         set_target_properties(tacaudio_gui PROPERTIES OUTPUT_NAME TacAudio)
         if(TAC_WITH_SOFA)  # the GUI finds hrtf/ next to its exe, like tacrender

@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include <qrcodegen.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -110,6 +112,8 @@ AppSettings loadSettings() {
             else if (k == "lastVersion") s.lastVersion = v;
             else if (k == "autoEngine") s.autoEngine = v == "1";
             else if (k == "stereoApps") s.stereoApps = v == "1";
+            else if (k == "remoteOn") s.remoteOn = v == "1";
+            else if (k == "remoteKey") s.remoteKey = v;
             else if (k == "closeToTray") s.closeToTray = v == "1";
             else if (k == "hotkeys") s.hotkeys = v == "1";
             else if (k == "setupDone") s.setupDone = v == "1";
@@ -167,7 +171,8 @@ void saveSettings(const AppSettings& s) {
       << "\nvolume=" << s.sound.volumeDb << "\n3d=" << (s.sound.enabled3d ? 1 : 0) << "\ndynOn=" << (s.dynOn ? 1 : 0)
       << "\ndynPreset=" << s.dynPreset << "\nstepsOn=" << (s.stepsOn ? 1 : 0) << "\nstepsLevel=" << s.stepsLevel
       << "\nbass=" << s.sound.bassDb << "\nstepsSmart=" << (s.stepsSmart ? 1 : 0) << "\nautoEngine=" << (s.autoEngine ? 1 : 0)
-      << "\nstereoApps=" << (s.stereoApps ? 1 : 0)
+      << "\nstereoApps=" << (s.stereoApps ? 1 : 0) << "\nremoteOn=" << (s.remoteOn ? 1 : 0)
+      << "\nremoteKey=" << s.remoteKey
       << "\ncloseToTray=" << (s.closeToTray ? 1 : 0) << "\nhotkeys=" << (s.hotkeys ? 1 : 0)
       << "\nsetupDone=" << (s.setupDone ? 1 : 0) << "\nautoProfiles=" << (s.autoProfiles ? 1 : 0)
       << "\ncheckUpdates=" << (s.checkUpdates ? 1 : 0) << "\neqOn=" << (s.eqOn ? 1 : 0) << "\neq=" << s.eqText
@@ -323,6 +328,7 @@ App::App(bool previewRunning) : preview_(previewRunning) {
                                   "### Install\n- Download the installer below."};
             updNotes_ = parsePatchNotes(update_->notes);
         }
+        if (GetEnvironmentVariableA("TACAUDIO_PREVIEW_REMOTE", nullptr, 0)) cfg_.remoteOn = true;  // dev: QR card
         cfg_.eqOn = true;  // sample correction curve for the Devices page
         cfg_.eqName = "Example headphones";
         cfg_.eqText = "-5.8|LSC:105:5.5:0.71|PK:180:-2.1:0.9|PK:2400:3.2:2.2|PK:4300:-3.5:3.5|PK:6200:2.4:4|HSC:10000:-1.5:0.71";
@@ -416,6 +422,7 @@ void App::toggle3d() {
 }
 
 void App::autoStartIfEnabled() {
+    normalLaunch_ = true;  // only a normal launch opens the phone remote's port
     if (!cfg_.setupDone) {  // first launch: guide the user instead of starting with no cable
         page_ = kPageSetup;
         return;
@@ -485,6 +492,7 @@ void App::pollBackground() {
     pollUpdates();
     pollDirect();
     pollOverlay();
+    pollRemote();
     supervise();
     if (wantRebuild_ && !busy() && session_.running()) {
         wantRebuild_ = false;
@@ -533,6 +541,10 @@ void App::pollBackground() {
                          cfg_.sound.volumeDb != saved_.sound.volumeDb || cfg_.sound.enabled3d != saved_.sound.enabled3d ||
                          cfg_.dynPreset != saved_.dynPreset || cfg_.stepsLevel != saved_.stepsLevel ||
                          cfg_.autoEngine != saved_.autoEngine || cfg_.stereoApps != saved_.stereoApps ||
+                         cfg_.remoteOn != saved_.remoteOn || cfg_.remoteKey != saved_.remoteKey ||
+                         cfg_.stepsOn != saved_.stepsOn || cfg_.stepsSmart != saved_.stepsSmart ||
+                         cfg_.dynOn != saved_.dynOn || cfg_.sound.room != saved_.sound.room ||
+                         cfg_.sound.bassDb != saved_.sound.bassDb ||
                          cfg_.closeToTray != saved_.closeToTray ||
                          cfg_.hotkeys != saved_.hotkeys || cfg_.setupDone != saved_.setupDone ||
                          cfg_.autoProfiles != saved_.autoProfiles || cfg_.checkUpdates != saved_.checkUpdates ||
@@ -1235,6 +1247,9 @@ void App::pageSettings() {
               "Give stereo apps TacAudio's effects too (for games that only play in stereo).",
               def.stereoApps);
     endCard();
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    remoteCard();
     ImGui::Dummy(ImVec2(0, S(6)));
 
     beginCard("##window", "Window & tray", nullptr, 0);
@@ -2033,6 +2048,200 @@ int App::profileForGame(const GameEntry& g) const {
     for (std::size_t i = 1; i < profiles_.size(); ++i)
         if (nameMatches(profiles_[i], g.name)) return static_cast<int>(i);
     return 0;
+}
+
+// ------------------------------------------------------------------ phone remote
+namespace {
+std::string jsonString(const std::string& s) {
+    std::string o = "\"";
+    for (const unsigned char c : s) {
+        if (c == '"' || c == '\\') {
+            o += '\\';
+            o += static_cast<char>(c);
+        } else if (c < 0x20) {
+            char b[8];
+            std::snprintf(b, sizeof(b), "\\u%04x", c);
+            o += b;
+        } else {
+            o += static_cast<char>(c);
+        }
+    }
+    return o + "\"";
+}
+}  // namespace
+
+void App::pollRemote() {
+    const bool want = cfg_.remoteOn && normalLaunch_ && !preview_;
+    if (!want) {
+        if (remote_.running()) remote_.stop();
+        remoteFailed_ = false;
+        return;
+    }
+    if (!remote_.running() && !remoteFailed_) {
+        if (cfg_.remoteKey.empty()) cfg_.remoteKey = RemoteServer::newKey();
+        remoteFailed_ = !remote_.start(cfg_.remoteKey);
+    }
+    if (!remote_.running()) return;
+    for (const auto& c : remote_.takeCommands()) applyRemote(c);
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastRemoteState_ < std::chrono::milliseconds(150)) return;
+    lastRemoteState_ = now;
+    remote_.setState(remoteStateJson());
+}
+
+void App::applyRemote(const RemoteCommand& c) {
+    const bool on = c.value == "1";
+    auto num = [&](float lo, float hi, float& out) {
+        try {
+            const float v = std::stof(c.value);
+            if (!std::isfinite(v)) return false;
+            out = std::clamp(v, lo, hi);
+            return true;
+        } catch (const std::exception&) {
+            return false;
+        }
+    };
+    float v = 0.0f;
+    if (c.name == "power") {
+        if (on != wantRunning_) startStop();
+    } else if (c.name == "3d") {
+        if (on != cfg_.sound.enabled3d) toggle3d();
+    } else if (c.name == "profile") {
+        try {
+            activateProfile(std::stoi(c.value));
+        } catch (const std::exception&) {
+        }
+    } else if (c.name == "stepsOn") {
+        cfg_.stepsOn = on;
+        requestRebuild();
+    } else if (c.name == "smart") {
+        cfg_.stepsSmart = on;
+        requestRebuild();
+    } else if (c.name == "steps" && num(0.0f, 12.0f, v)) {
+        cfg_.stepsLevel = v;
+        requestRebuild();
+    } else if (c.name == "dyn") {
+        if (c.value == "off") {
+            cfg_.dynOn = false;
+        } else if (indexOf(kPresets, c.value, -1) >= 0) {
+            cfg_.dynOn = true;
+            cfg_.dynPreset = c.value;
+        }
+        requestRebuild();
+    } else if (c.name == "room" && indexOf(kRooms, c.value, -1) >= 0) {
+        cfg_.sound.room = c.value;
+        requestRebuild();
+    } else if (c.name == "volume" && num(-30.0f, 6.0f, v)) {
+        cfg_.sound.volumeDb = v;
+        session_.setVolumeDb(v);
+    } else if (c.name == "bass" && num(-12.0f, 6.0f, v)) {
+        cfg_.sound.bassDb = v;
+        requestRebuild();
+    }
+}
+
+std::string App::remoteStateJson() const {
+    float l = 0.0f, r = 0.0f;
+    if (direct_) {
+        if (apoStatus_ && wantRunning_) {
+            l = std::pow(10.0f, apoStatus_->outLDb / 20.0f);
+            r = std::pow(10.0f, apoStatus_->outRDb / 20.0f);
+        }
+    } else {
+        const_cast<AudioSession&>(session_).meters(l, r);
+    }
+    std::string profiles = "[";
+    for (std::size_t i = 0; i < profiles_.size(); ++i) profiles += (i ? "," : "") + jsonString(profiles_[i].name);
+    profiles += "]";
+    const std::string game =
+        activeProfile_ > 0 && activeProfile_ < static_cast<int>(profiles_.size()) ? profiles_[activeProfile_].name : "";
+    char b[640];
+    std::snprintf(b, sizeof(b),
+                  "{\"version\":\"%s\",\"on\":%s,\"playing\":%s,\"surround\":%s,\"d3\":%s,\"profile\":%d,"
+                  "\"stepsOn\":%s,\"steps\":%.1f,\"smart\":%s,\"dyn\":\"%s\",\"room\":\"%s\",\"volume\":%.1f,"
+                  "\"bass\":%.1f,\"l\":%.1f,\"r\":%.1f,",
+                  TAC_VERSION, wantRunning_ ? "true" : "false", status_.engine.running ? "true" : "false",
+                  status_.source.find("7.1") != std::string::npos ? "true" : "false",
+                  cfg_.sound.enabled3d ? "true" : "false", activeProfile_, cfg_.stepsOn ? "true" : "false",
+                  cfg_.stepsLevel, cfg_.stepsSmart ? "true" : "false", cfg_.dynOn ? cfg_.dynPreset.c_str() : "off",
+                  cfg_.sound.room.c_str(), cfg_.sound.volumeDb, cfg_.sound.bassDb, toDb(l), toDb(r));
+    return std::string(b) + "\"game\":" + jsonString(game) + ",\"profiles\":" + profiles + "}";
+}
+
+void App::remoteCard() {
+    const AppSettings def;
+    beginCard("##remote", "Phone remote", nullptr, 0,
+              "Control TacAudio from your phone's browser while you play: power, 3D, profile, footsteps, dynamics, "
+              "room, volume and bass. Nothing to install on the phone. It works only on your home network and only "
+              "for phones that scanned the code.");
+    toggleRow("Phone remote", &cfg_.remoteOn, "Use your phone as a remote, on the same Wi-Fi as this PC.", def.remoteOn);
+    if (!cfg_.remoteOn) {
+        endCard();
+        return;
+    }
+    const std::string url = preview_ ? "http://192.168.1.20:47800/#k=3f9c2a7e5b1d4c8a9e0f6b2d7a4c1e8f" : remote_.url();
+    if (preview_) {  // dev: TACAUDIO_PREVIEW_REMOTE=<file> also saves the state a phone would get
+        static bool saved = false;
+        char f[MAX_PATH] = {};
+        if (!saved && GetEnvironmentVariableA("TACAUDIO_PREVIEW_REMOTE", f, MAX_PATH) && f[0] && f[0] != '1') {
+            std::ofstream(f) << remoteStateJson();
+            saved = true;
+        }
+    }
+    const bool up = preview_ || remote_.running();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + S(104));
+    ImGui::BeginGroup();
+    if (!up) {
+        para(remote_.error().empty() ? "Starting..." : remote_.error().c_str(), col::Red, 12.5f);
+        if (remoteFailed_ && actionButton("Try again", true, true, S(140))) remoteFailed_ = false;
+    } else if (url.empty()) {
+        para("No home network found. Connect this PC to your router (Wi-Fi or cable), then switch Phone remote off "
+             "and on.",
+             col::Red, 12.5f);
+    } else {
+        // QR code: dark modules on white with a quiet zone, crisp at any UI scale.
+        const qrcodegen::QrCode qr = qrcodegen::QrCode::encodeText(url.c_str(), qrcodegen::QrCode::Ecc::MEDIUM);
+        const int n = qr.getSize(), quiet = 3;
+        const float cell = std::floor(S(176) / static_cast<float>(n + 2 * quiet));
+        const float side = cell * static_cast<float>(n + 2 * quiet);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled(p, p + ImVec2(side, side), IM_COL32(255, 255, 255, 255), S(8));
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                if (qr.getModule(x, y)) {
+                    const ImVec2 a = p + ImVec2(static_cast<float>(x + quiet) * cell, static_cast<float>(y + quiet) * cell);
+                    dl->AddRectFilled(a, a + ImVec2(cell, cell), IM_COL32(14, 17, 22, 255));
+                }
+        ImGui::Dummy(ImVec2(side, side));
+        ImGui::SameLine(0, S(22));
+        ImGui::BeginGroup();
+        ui::text("1.  Open the camera on your phone and point it at the code.", col::Text, 13.5f);
+        ui::text("2.  Tap the link: the remote opens in the phone's browser.", col::Text, 13.5f);
+        ui::text("3.  Tip: \"Add to Home Screen\" keeps it like an app.", col::Text, 13.5f);
+        ImGui::Dummy(ImVec2(0, S(6)));
+        const int phones = preview_ ? 1 : remote_.phonesConnected();
+        char b[96];
+        std::snprintf(b, sizeof(b), phones == 0 ? "No phone connected" : phones == 1 ? "1 phone connected"
+                                                                                     : "%d phones connected",
+                      phones);
+        ui::text(b, phones ? col::Green : col::Dim, 13.0f, true);
+        const std::string addr = url.substr(0, url.find('#'));
+        ui::text(("Address: " + addr).c_str(), col::Faint, 12.5f);
+        ImGui::Dummy(ImVec2(0, S(4)));
+        if (pillButton("New code", col::CardHi, col::Text, S(130)) && !preview_) {
+            cfg_.remoteKey = RemoteServer::newKey();  // phones that scanned the old code are locked out
+            remote_.stop();
+            remoteFailed_ = false;
+        }
+        if (ImGui::IsItemHovered()) tooltip("Makes a new code. Phones that scanned the old one stop working until they scan the new one.");
+        ImGui::EndGroup();
+        ImGui::Dummy(ImVec2(0, S(4)));
+        para("If Windows asks, allow TacAudio on private networks. Both devices must be on the same network.", col::Dim,
+             12.5f);
+    }
+    ImGui::EndGroup();
+    endCard();
 }
 
 void App::activateProfile(int index) {

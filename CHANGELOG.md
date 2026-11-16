@@ -6,6 +6,9 @@
 
 ## 0.7.8 - 2026-11-16
 
+### New
+- Phone remote: control TacAudio from your phone while you play, with nothing to install. Turn it on in Settings > Phone remote and scan the QR code with your phone camera. You get power, 3D, your game profile, footstep clarity, combat dynamics, room, volume and bass, with live levels. It works only on your home Wi-Fi and only for phones that scanned the code (New code locks out the others). If Windows asks, allow TacAudio on private networks.
+
 ### Fixed
 - After Update now, the "update the engine" notice could stay up even though the engine was already updated, until you closed and reopened TacAudio. The app now reopens only after the engine is updated, and the notice goes away by itself.
 

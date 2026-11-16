@@ -19,6 +19,7 @@
 #include "overlay.h"
 #include "core/headphone_eq.h"
 #include "core/patch_notes.h"
+#include "remote.h"
 #include "profiles.h"
 #include "update_check.h"
 #include "session.h"
@@ -44,6 +45,8 @@ struct AppSettings {
     bool startWithWindows = false;  // mirrored from the registry Run key
     bool autoEngine = true;         // turn the engine on when the app starts
     bool stereoApps = false;        // Direct mode: also process apps without surround sound (not just the game)
+    bool remoteOn = false;          // phone remote (web page on the home network)
+    std::string remoteKey;          // its pairing key (in the QR code); a new one disconnects phones
     bool closeToTray = true;        // the window's X keeps TacAudio running in the tray
     bool hotkeys = true;            // Ctrl+Alt+F10 power, Ctrl+Alt+F9 3D on/off
     bool setupDone = false;         // setup assistant finished or skipped (shown on first launch)
@@ -139,6 +142,12 @@ private:
     void finishSetup(bool turnOn);
 
     void startStop();
+    // Phone remote (remote.h): runs the server while Settings > Phone remote is on, applies the
+    // phone's commands like the app's own controls and publishes the state it shows.
+    void pollRemote();
+    void applyRemote(const RemoteCommand& c);
+    std::string remoteStateJson() const;
+    void remoteCard();
     void supervise();  // reconnect after device loss / failed start
     void requestRebuild() { wantRebuild_ = true; }
     void pollBackground();
@@ -204,6 +213,11 @@ private:
     std::chrono::steady_clock::time_point captureAt_{};
     std::string captureFile_;
     bool engineOutdated_ = false;         // Direct mode: installed engine is older than this app's
+
+    RemoteServer remote_;
+    bool normalLaunch_ = false;           // not a --smoke-test / preview run: may open the network port
+    bool remoteFailed_ = false;           // start failed: wait until switched off and on again
+    std::chrono::steady_clock::time_point lastRemoteState_{};
 
     // Game profiles and the game library (Profiles page).
     std::vector<GameProfile> profiles_;
