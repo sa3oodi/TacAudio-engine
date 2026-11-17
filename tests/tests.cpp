@@ -1322,8 +1322,8 @@ struct ApoFixture {
         std::error_code ec;
         std::filesystem::remove(ini, ec);
     }
-    std::unique_ptr<apo::ApoEngine> make(bool comms = false) const {
-        auto e = std::make_unique<apo::ApoEngine>(48000.0, 8, 0x63F, cli::exeDir(), ini, comms);
+    std::unique_ptr<apo::ApoEngine> make(bool comms = false, std::uint32_t ch = 8, std::uint32_t mask = 0x63F) const {
+        auto e = std::make_unique<apo::ApoEngine>(48000.0, ch, mask, cli::exeDir(), ini, comms);
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // the worker builds the renderer
         return e;
     }
@@ -1345,12 +1345,12 @@ std::vector<float> apoStream(std::size_t frames, bool surround, std::uint32_t se
     return v;
 }
 
-std::vector<float> apoRun(apo::ApoEngine& e, const std::vector<float>& in) {
-    const std::size_t frames = in.size() / 8;
+std::vector<float> apoRun(apo::ApoEngine& e, const std::vector<float>& in, std::size_t ch = 8) {
+    const std::size_t frames = in.size() / ch;
     std::vector<float> out(frames * 2, 0.0f);
     for (std::size_t done = 0; done < frames;) {
         const std::uint32_t n = static_cast<std::uint32_t>(std::min<std::size_t>(480, frames - done));
-        e.process(in.data() + done * 8, out.data() + done * 2, n, 2);
+        e.process(in.data() + done * ch, out.data() + done * 2, n, 2);
         done += n;
     }
     return out;
@@ -1487,6 +1487,38 @@ void testApoGameSoundOnly() {
         apoRun(*e, apoStream(kSec, true, 23));
         CHECK(e->mode() == 1);
         CHECK(!e->rendering());
+    }
+
+    // 9) The engine takes the channel count the app opened with (BF2042 / Squad open plain stereo
+    //    and fail if the effect insists on 7.1). Stereo input: clean, identical to the 7.1 case.
+    {
+        ApoFixture fx("");
+        auto e = fx.make(false, 2, 0x3);
+        const auto in8 = apoStream(2 * kSec, false, 24);
+        std::vector<float> in2(in8.size() / 4);
+        for (std::size_t i = 0; i < in2.size() / 2; ++i) {
+            in2[i * 2] = in8[i * 8];
+            in2[i * 2 + 1] = in8[i * 8 + 1];
+        }
+        const auto out = apoRun(*e, in2, 2);
+        CHECK(e->mode() == 0);
+        CHECK(!e->rendering());
+        CHECK(apoCleanError(in8, out, 0, in8.size() / 8) < 1e-6);
+    }
+    // 10) 5.1 input (6 channels): surround content gets TacAudio's sound.
+    {
+        ApoFixture fx("");
+        auto e = fx.make(false, 6, 0x3F);
+        const auto in8 = apoStream(2 * kSec, true, 25);
+        std::vector<float> in6(in8.size() / 8 * 6);
+        for (std::size_t i = 0; i < in6.size() / 6; ++i)  // 7.1 side -> 5.1 back (FL FR FC LFE BL BR)
+            for (int c = 0; c < 6; ++c) in6[i * 6 + c] = in8[i * 8 + (c < 4 ? c : c + 2)];
+        const auto out = apoRun(*e, in6, 6);
+        CHECK(e->mode() == 1);
+        CHECK(e->rendering());
+        bool finite = true;
+        for (float v : out) finite = finite && std::isfinite(v) && std::abs(v) <= 1.0f;
+        CHECK(finite);
     }
 }
 

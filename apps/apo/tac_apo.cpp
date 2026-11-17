@@ -387,14 +387,19 @@ public:
                 discovery ? " (discovery only)" : "", comms_ ? " (voice call)" : "", wantCh_);
         return S_OK;
     }
-    // Input side: ask for float32 with wantCh_ channels at the output's rate.
+    // Input side: float32 at the output's rate, with the channel count the app opened (1..8). Games
+    // that open 7.1 / 5.1 come in as 7.1 / 5.1; stereo apps as stereo. Anything else gets a
+    // wantCh_-channel suggestion. Insisting on wantCh_ for a stereo request made Windows refuse
+    // stereo streams in the device's own mix format (BF2042, Squad and IAudioClient3 low-latency
+    // streams got AUDCLNT_E_UNSUPPORTED_FORMAT and played nothing).
     STDMETHODIMP IsInputFormatSupported(IAudioMediaType* out, IAudioMediaType* req, IAudioMediaType** supported) override {
         if (!supported) return E_POINTER;
         *supported = nullptr;
         UNCOMPRESSEDAUDIOFORMAT r{}, o{};
         const bool haveReq = getFormat(req, r), haveOut = getFormat(out, o);
         HRESULT hr;
-        if (haveReq && isFloat32(r) && r.dwSamplesPerFrame == wantCh_ && (!haveOut || r.fFramesPerSecond == o.fFramesPerSecond)) {
+        if (haveReq && isFloat32(r) && r.dwSamplesPerFrame >= 1 && r.dwSamplesPerFrame <= kMaxCh &&
+            (!haveOut || r.fFramesPerSecond == o.fFramesPerSecond)) {
             req->AddRef();
             *supported = req;
             hr = S_OK;

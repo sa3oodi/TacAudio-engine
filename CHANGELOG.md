@@ -4,6 +4,11 @@
      GitHub come from its section. Format: "## <version> - <date>", then "### New", "### Improved"
      or "### Fixed", then "- " lines. Keep it short and in plain words for players. -->
 
+## 0.7.10 - 2026-11-17
+
+### Fixed
+- Battlefield 2042, Squad and other games had no sound at all while the engine was installed, and TacAudio kept saying "Waiting for the game". The engine refused games that open plain stereo in the device's own format. It now takes whatever the game opens with: 7.1 and 5.1 get TacAudio's 3D sound, stereo plays clean. After updating, click Update engine when the app asks.
+
 ## 0.7.9 - 2026-11-16
 
 ### Fixed
